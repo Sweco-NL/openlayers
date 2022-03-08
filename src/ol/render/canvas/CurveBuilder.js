@@ -10,7 +10,7 @@ import CanvasInstruction, {
 } from './Instruction.js';
 import GeometryType from '../../geom/GeometryType.js';
 
-class CanvasCircularStringBuilder extends CanvasBuilder {
+class CanvasCurveBuilder extends CanvasBuilder {
   /**
    * @param {number} tolerance Tolerance.
    * @param {import("../../extent.js").Extent} maxExtent Maximum extent.
@@ -83,8 +83,8 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   /**
    * Appends the drawing instructions for drawing the given curve polygon
    * geometry to the list of instructions.
-   * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry Curve Polygon.
    * @private
+   * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry Curve Polygon.
    */
   appendCurvePolygonInstructions(curvePolygonGeometry) {
     const state = this.state;
@@ -127,9 +127,9 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   /**
    * Appends the drawing instructions for drawing the given compound curve
    * geometry to the list of instructions.
+   * @private
    * @param {import("../../geom/CompoundCurve.js").default} compoundCurveGeometry
    * The compound curve geometry for which to append instructions.
-   * @private
    */
   appendCompoundCurveInstructions(compoundCurveGeometry) {
     let geometryFlatCoords = [];
@@ -169,10 +169,10 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
    * coordinates are appended as well. They are expected to contain start,
    * middle, center of circle, and end coordinates for each arc in this
    * specific order.
+   * @private
    * @param {Array<number>} flatCoordinates The string's coordinates.
    * @param {number} startIndex The coordinate start index of the
    * MOVE_TO_ARC_TO instruction.
-   * @private
    */
   appendCircularStringInstruction(
     flatCoordinates,
@@ -189,11 +189,11 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   /**
    * Appends a line string instruction given the string's coordinates. The
    * coordinates are appended as well.
+   * @private
    * @param {Array<number>} flatCoordinates The line string's coordinates.
    * @param {number} stride The coordinates' stride.
    * @param {number} startIndex The coordinate start index of the
    * MOVE_TO_LINE_TO instruction.
-   * @private
    */
   appendLineStringInstruction(
     flatCoordinates,
@@ -211,10 +211,10 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   /**
    * Appends the provided coordinates with the given stride to the list of
    * coordinates used for drawing.
+   * @private
    * @param {Array<number>} flatCoordinates The given coordinates.
    * @param {number} stride The given stride.
    * @return {number} The coordinates array's new length.
-   * @private
    */
   appendCoordinates(flatCoordinates, stride) {
     const coordinates = this.coordinates;
@@ -274,4 +274,4 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   }
 }
 
-export default CanvasCircularStringBuilder;
+export default CanvasCurveBuilder;

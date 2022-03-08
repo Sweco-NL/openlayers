@@ -3,7 +3,7 @@
  */
 
 import Builder from './Builder.js';
-import CircularStringBuilder from './CircularStringBuilder.js';
+import CurveBuilder from './CurveBuilder.js';
 import ImageBuilder from './ImageBuilder.js';
 import LineStringBuilder from './LineStringBuilder.js';
 import PolygonBuilder from './PolygonBuilder.js';
@@ -14,13 +14,13 @@ import TextBuilder from './TextBuilder.js';
  */
 const BATCH_CONSTRUCTORS = {
   'Circle': PolygonBuilder,
-  'CircularString': CircularStringBuilder,
-  'CompoundCurve': CircularStringBuilder,
+  'CircularString': CurveBuilder,
+  'CompoundCurve': CurveBuilder,
   'Default': Builder,
   'Image': ImageBuilder,
   'LineString': LineStringBuilder,
   'Polygon': PolygonBuilder,
-  'CurvePolygon': CircularStringBuilder,
+  'CurvePolygon': CurveBuilder,
   'Text': TextBuilder,
 };
 
