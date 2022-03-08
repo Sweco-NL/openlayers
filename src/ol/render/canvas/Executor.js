@@ -707,7 +707,6 @@ class Executor {
           ++i;
           break;
         case CanvasInstruction.MOVE_TO_ARC_TO:
-          console.log('pixelcoords', pixelCoordinates);
           d = /** @type {number} */ instruction[1]; // start arc
           dd = /** @type {number} */ instruction[2] - 2; // end
           for (let arcIndex = 0; d < dd; d += 6, ++arcIndex) {
@@ -727,7 +726,6 @@ class Executor {
             const angles = arc.angles(
               new Vector2(centerOfCircleX, centerOfCircleY)
             );
-            console.log(angles);
             const clockwise = arc.clockwise(angles);
             const fullCircle = arc.fullCircle();
             const radius = distance(
@@ -744,7 +742,6 @@ class Executor {
               moveToX = (moveToX + 0.5) | 0;
               moveToY = (moveToY + 0.5) | 0;
               if (moveToX !== prevX || moveToY !== prevY) {
-                console.log('move to arc', moveToX, prevX, moveToY, prevY);
                 context.moveTo(moveToX, moveToY);
               }
             }
@@ -758,7 +755,6 @@ class Executor {
             );
             prevX = (endX + 0.5) | 0;
             prevY = (endY + 0.5) | 0;
-            console.log('arc end', prevX, prevY);
           }
           ++i;
           break;
@@ -1138,16 +1134,13 @@ class Executor {
           ++i;
           break;
         case CanvasInstruction.MOVE_TO_LINE_TO:
-          console.log('move_to_line_to');
           d = /** @type {number} */ (instruction[1]);
           dd = /** @type {number} */ (instruction[2]);
           x = pixelCoordinates[d];
           y = pixelCoordinates[d + 1];
-          console.log('line start', x, y);
           roundX = (x + 0.5) | 0;
           roundY = (y + 0.5) | 0;
           if (roundX !== prevX || roundY !== prevY) {
-            console.log('move to line', roundX, prevX, roundY, prevY);
             context.moveTo(x, y);
             prevX = roundX;
             prevY = roundY;
@@ -1159,7 +1152,6 @@ class Executor {
             roundY = (y + 0.5) | 0;
             if (d == dd - 2 || roundX !== prevX || roundY !== prevY) {
               context.lineTo(x, y);
-              console.log('line to', x, y);
               prevX = roundX;
               prevY = roundY;
             }
