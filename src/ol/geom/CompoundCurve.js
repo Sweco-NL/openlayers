@@ -3,50 +3,13 @@
  */
 import GeometryType from './GeometryType.js';
 import SimpleGeometry from './SimpleGeometry.js';
-import {abstract} from '../util.js';
 import {
   closestSquaredDistanceXY,
   createOrUpdateEmpty,
-  extend, getCenter,
+  extend,
 } from '../extent.js';
 import {deflateCoordinates} from './flat/deflate.js';
 import {inflateCoordinates} from './flat/inflate.js';
-
-/**
- *
- */
-class CompoundCurveSegmentDescription {
-  constructor(type, start, length) {
-    /**
-     * @type {GeometryType}
-     */
-    this.type = type;
-
-    /**
-     * @type {number}
-     */
-    this.start = start;
-
-    /**
-     * @type {number}
-     */
-    this.length = length;
-  }
-}
-
-class CompoundCurveDescription {
-  constructor() {
-    /**
-     * @type {Array<import("../coordinate.js").Coordinate>}
-     */
-    this.coordinates = [];
-
-    /**
-     * @type {Array<CompoundCurveSegmentDescription>}
-     */
-    this.segmentDescriptions = [];
-  }
-}
 
 /**
  * @classdesc
@@ -83,66 +46,64 @@ class CompoundCurve extends SimpleGeometry {
         geometries
       );
 
-    this.description_ = this.createDescription();
+    this.updateCoordinates();
+  }
 
+  /**
+   * Updates the curve's coordinates based on the geometries' coordinates.
+   */
+  updateCoordinates() {
     this.setCoordinates_(
-      /** @type {Array<import("../coordinate.js").Coordinate>} */ (
-        this.description_.coordinates
-      ),
-      opt_layout
+      this.geometries_.reduce((previous, current) => {
+        if (previous.length < 1) {
+          return previous.concat(current.getCoordinates());
+        }
+
+        return previous.concat(current.getCoordinates().slice(1));
+      }, [])
     );
   }
 
+  /**
+   * Returns the array of geometries of which this curve consists.
+   * @return {Array<import('../geom/SimpleGeometry.js').default>}
+   * The geometries.
+   */
+  getGeometries() {
+    return this.geometries_;
+  }
+
+  /**
+   * Reverses the curve.
+   */
   reverse() {
-    this.geometries_.reverse();
-    this.description_ = this.createDescription();
-    this.setCoordinates_(
-      /** @type {Array<import("../coordinate.js").Coordinate>} */ (
-        this.description_.coordinates
-      ),
-      this.layout
-    );
-  }
-
-  /**
-   * @return {CompoundCurveDescription} compound curve description
-   */
-  getDescription() {
-    return this.description_;
-  }
-
-  /**
-   * @private
-   * @return {CompoundCurveDescription} compound curve description
-   */
-  createDescription() {
-    const data = new CompoundCurveDescription();
-
     this.geometries_.forEach((geometry) => {
-      const geometryCoordinates = geometry.getCoordinates();
-      const segmentDescription = new CompoundCurveSegmentDescription(
-        geometry.getType(),
-        0,
-        geometryCoordinates.length
-      );
-
-      if (data.coordinates.length < 1) {
-        data.coordinates = data.coordinates.concat(geometryCoordinates);
-      } else {
-        segmentDescription.start = data.coordinates.length - 1;
-        data.coordinates = data.coordinates.concat(
-          geometryCoordinates.slice(1)
-        );
-      }
-
-      data.segmentDescriptions.push(segmentDescription);
+      geometry.reverse();
     });
-
-    return data;
+    this.geometries_.reverse();
+    this.updateCoordinates();
+    this.changed();
   }
 
   /**
-   * Get the type of this geometry.
+   * Apply a transform function to the coordinates of the geometry.
+   * The geometry is modified in place.
+   * If you do not want the geometry modified in place, first `clone()` it and
+   * then use this function on the clone.
+   * @param {import("../proj.js").TransformFunction} transformFn Transform function.
+   * Called with a flat array of geometry coordinates.
+   * @api
+   */
+  applyTransform(transformFn) {
+    const geometries = this.geometries_;
+    for (let i = 0, ii = geometries.length; i < ii; ++i) {
+      geometries[i].applyTransform(transformFn);
+    }
+    super.applyTransform(transformFn);
+  }
+
+  /**
+   * Returns the type of this geometry.
    * @return {import("./GeometryType.js").default} Geometry type.
    * @api
    */
@@ -151,22 +112,12 @@ class CompoundCurve extends SimpleGeometry {
   }
 
   /**
-   * This base class method has not been implemented yet, because whenever this
-   * method will be called, only setting coordinates would not be enough: the geometries
-   * should also be updated, which might not be trivial.
-   * @param {!Array<import("../coordinate.js").Coordinate>} coordinates Coordinates.
-   * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
-   * @api
-   */
-  setCoordinates(coordinates, opt_layout) {
-    abstract();
-  }
-
-  /**
-   * Set the coordinates of the compound curve.
-   * @param {!Array<import("../coordinate.js").Coordinate>} coordinates Coordinates.
-   * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
-   * @api
+   * Sets the coordinates of this curve.
+   * @private
+   * @param {!Array<import("../coordinate.js").Coordinate>} coordinates
+   * The given coordinates.
+   * @param {import("./GeometryLayout.js").default} [opt_layout]
+   * The geometry layout.
    */
   setCoordinates_(coordinates, opt_layout) {
     this.setLayout(opt_layout, coordinates, 1);
@@ -189,7 +140,7 @@ class CompoundCurve extends SimpleGeometry {
    */
   clone() {
     const compoundCurve = new CompoundCurve(
-      this.geometries_.slice(),
+      this.geometries_.map((geometry) => geometry.clone()),
       this.layout
     );
     compoundCurve.applyProperties(this);
@@ -197,7 +148,7 @@ class CompoundCurve extends SimpleGeometry {
   }
 
   /**
-   * Return the coordinates of the circular string.
+   * Returns the coordinates of the circular string.
    * @return {Array<import("../coordinate.js").Coordinate>} Coordinates.
    * @api
    */
@@ -211,8 +162,9 @@ class CompoundCurve extends SimpleGeometry {
   }
 
   /**
-   * @param {import("../extent.js").Extent} extent Extent.
+   * Computes the extent of the compound curve.
    * @protected
+   * @param {import("../extent.js").Extent} extent Extent.
    * @return {import("../extent.js").Extent} extent Extent.
    */
   computeExtent(extent) {
@@ -245,91 +197,6 @@ class CompoundCurve extends SimpleGeometry {
       );
     }
     return minSquaredDistance;
-  }
-
-  /**
-   * Test if the geometry and the passed extent intersect.
-   * @param {import("../extent.js").Extent} extent Extent.
-   * @return {boolean} `true` if the geometry and the extent intersect.
-   * @api
-   */
-  intersectsExtent(extent) {
-    const geometries = this.geometries_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      if (geometries[i].intersectsExtent(extent)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Apply a transform function to the coordinates of the geometry.
-   * The geometry is modified in place.
-   * If you do not want the geometry modified in place, first `clone()` it and
-   * then use this function on the clone.
-   * @param {import("../proj.js").TransformFunction} transformFn Transform function.
-   * Called with a flat array of geometry coordinates.
-   * @api
-   */
-  applyTransform(transformFn) {
-    const geometries = this.geometries_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      geometries[i].applyTransform(transformFn);
-    }
-    super.applyTransform(transformFn);
-  }
-
-  /**
-   * Rotate the geometry around a given coordinate. This modifies the geometry
-   * coordinates in place.
-   * @param {number} angle Rotation angle in radians.
-   * @param {import("../coordinate.js").Coordinate} anchor The rotation center.
-   * @api
-   */
-  rotate(angle, anchor) {
-    const geometries = this.geometries_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      geometries[i].rotate(angle, anchor);
-    }
-    super.rotate(angle, anchor);
-  }
-
-  /**
-   * Scale the geometry (with an optional origin).  This modifies the geometry
-   * coordinates in place.
-   * @abstract
-   * @param {number} sx The scaling factor in the x-direction.
-   * @param {number} [opt_sy] The scaling factor in the y-direction (defaults to sx).
-   * @param {import("../coordinate.js").Coordinate} [opt_anchor] The scale origin (defaults to the center
-   *     of the geometry extent).
-   * @api
-   */
-  scale(sx, opt_sy, opt_anchor) {
-    let anchor = opt_anchor;
-    if (!anchor) {
-      anchor = getCenter(this.getExtent());
-    }
-    const geometries = this.geometries_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      geometries[i].scale(sx, opt_sy, anchor);
-    }
-    super.scale(sx, opt_sy, opt_anchor);
-  }
-
-  /**
-   * Translate the geometry.  This modifies the geometry coordinates in place.  If
-   * instead you want a new geometry, first `clone()` this geometry.
-   * @param {number} deltaX Delta X.
-   * @param {number} deltaY Delta Y.
-   * @api
-   */
-  translate(deltaX, deltaY) {
-    const geometries = this.geometries_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      geometries[i].translate(deltaX, deltaY);
-    }
-    super.translate(deltaX, deltaY);
   }
 }
 

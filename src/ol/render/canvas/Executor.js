@@ -2,7 +2,7 @@
  * @module ol/render/canvas/Executor
  */
 import CanvasInstruction from './Instruction.js';
-import {CircularArc} from '../../geom/flat/CircularArc.js';
+import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
 import {TEXT_ALIGN} from './TextBuilder.js';
 import {WORKER_OFFSCREEN_CANVAS} from '../../has.js';
 import {
@@ -23,6 +23,7 @@ import {
   measureTextHeight,
   measureTextWidths,
 } from '../canvas.js';
+import {distance} from '../../coordinate.js';
 import {drawTextOnPath} from '../../geom/flat/textpath.js';
 import {equals} from '../../array.js';
 import {lineStringLength} from '../../geom/flat/length.js';
@@ -661,8 +662,6 @@ class Executor {
       rotation: viewRotation,
     });
 
-    const tmpArc = new CircularArc();
-
     // When the batch size gets too big, performance decreases. 200 is a good
     // balance between batch size and number of fill/stroke instructions.
     const batchSize =
@@ -707,45 +706,59 @@ class Executor {
           }
           ++i;
           break;
-        case CanvasInstruction.CIRCULAR_ARC:
+        case CanvasInstruction.MOVE_TO_ARC_TO:
+          console.log('pixelcoords', pixelCoordinates);
           d = /** @type {number} */ instruction[1]; // start arc
           dd = /** @type {number} */ instruction[2] - 2; // end
-          let first = true;
-          for (; d < dd; d += 4) {
-            tmpArc.begin.x = pixelCoordinates[d];
-            tmpArc.begin.y = pixelCoordinates[d + 1];
-            tmpArc.middle.x = pixelCoordinates[d + 2];
-            tmpArc.middle.y = pixelCoordinates[d + 3];
-            tmpArc.end.x = pixelCoordinates[d + 4];
-            tmpArc.end.y = pixelCoordinates[d + 5];
-            const drawable = tmpArc.drawable();
-            if (first) {
-              let moveToX;
-              let moveToY;
-              if (tmpArc.fullCircle()) {
-                moveToX = drawable.centerOfCircle.x + drawable.radius;
-                moveToY = drawable.centerOfCircle.y;
-              } else {
-                moveToX = drawable.begin.x;
-                moveToY = drawable.begin.y;
+          for (let arcIndex = 0; d < dd; d += 6, ++arcIndex) {
+            const beginX = pixelCoordinates[d];
+            const beginY = pixelCoordinates[d + 1];
+            const middleX = pixelCoordinates[d + 2];
+            const middleY = pixelCoordinates[d + 3];
+            const centerOfCircleX = pixelCoordinates[d + 4];
+            const centerOfCircleY = pixelCoordinates[d + 5];
+            const endX = pixelCoordinates[d + 6];
+            const endY = pixelCoordinates[d + 7];
+            const arc = new CircularArc(
+              new Vector2(beginX, beginY),
+              new Vector2(middleX, middleY),
+              new Vector2(endX, endY)
+            );
+            const angles = arc.angles(
+              new Vector2(centerOfCircleX, centerOfCircleY)
+            );
+            console.log(angles);
+            const clockwise = arc.clockwise(angles);
+            const fullCircle = arc.fullCircle();
+            const radius = distance(
+              [beginX, beginY],
+              [centerOfCircleX, centerOfCircleY]
+            );
+            if (arcIndex === 0) {
+              let moveToX = beginX;
+              let moveToY = beginY;
+              if (fullCircle) {
+                moveToX = centerOfCircleX + radius;
+                moveToY = centerOfCircleY;
               }
               moveToX = (moveToX + 0.5) | 0;
               moveToY = (moveToY + 0.5) | 0;
               if (moveToX !== prevX || moveToY !== prevY) {
+                console.log('move to arc', moveToX, prevX, moveToY, prevY);
                 context.moveTo(moveToX, moveToY);
               }
-              first = false;
             }
             context.arc(
-              drawable.centerOfCircle.x,
-              drawable.centerOfCircle.y,
-              drawable.radius,
-              drawable.startAngle,
-              drawable.endAngle,
-              !drawable.clockwise
+              centerOfCircleX,
+              centerOfCircleY,
+              radius,
+              angles.startAngle,
+              angles.endAngle,
+              clockwise
             );
-            prevX = (tmpArc.end.x + 0.5) | 0;
-            prevY = (tmpArc.end.y + 0.5) | 0;
+            prevX = (endX + 0.5) | 0;
+            prevY = (endY + 0.5) | 0;
+            console.log('arc end', prevX, prevY);
           }
           ++i;
           break;
@@ -1125,13 +1138,16 @@ class Executor {
           ++i;
           break;
         case CanvasInstruction.MOVE_TO_LINE_TO:
+          console.log('move_to_line_to');
           d = /** @type {number} */ (instruction[1]);
           dd = /** @type {number} */ (instruction[2]);
           x = pixelCoordinates[d];
           y = pixelCoordinates[d + 1];
+          console.log('line start', x, y);
           roundX = (x + 0.5) | 0;
           roundY = (y + 0.5) | 0;
           if (roundX !== prevX || roundY !== prevY) {
+            console.log('move to line', roundX, prevX, roundY, prevY);
             context.moveTo(x, y);
             prevX = roundX;
             prevY = roundY;
@@ -1143,6 +1159,7 @@ class Executor {
             roundY = (y + 0.5) | 0;
             if (d == dd - 2 || roundX !== prevX || roundY !== prevY) {
               context.lineTo(x, y);
+              console.log('line to', x, y);
               prevX = roundX;
               prevY = roundY;
             }

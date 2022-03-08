@@ -4,42 +4,7 @@
 import GeometryType from './GeometryType.js';
 import SimpleGeometry from './SimpleGeometry.js';
 import {createOrUpdateEmpty, extend} from '../extent.js';
-import {deflateCoordinates} from './flat/deflate.js';
-import {linearRingsAreOriented, orientLinearRings} from './flat/orient.js';
-import {inflateCoordinates} from './flat/inflate.js';
-
-class CurvePolygonRingDescription {
-  constructor(type, start, length) {
-    /**
-     * @type {GeometryType}
-     */
-    this.type = type;
-
-    /**
-     * @type {number}
-     */
-    this.start = start;
-
-    /**
-     * @type {number}
-     */
-    this.length = length;
-  }
-}
-
-class CurvePolygonDescription {
-  constructor() {
-    /**
-     * @type {Array<import("../coordinate.js").Coordinate>}
-     */
-    this.coordinates = [];
-
-    /**
-     * @type {Array<CurvePolygonRingDescription>}
-     */
-    this.ringDescriptions = [];
-  }
-}
+import {linearRingIsClockwise} from './flat/orient.js';
 
 class CurvePolygon extends SimpleGeometry {
   /**
@@ -56,126 +21,67 @@ class CurvePolygon extends SimpleGeometry {
     this.rings_ =
       /** @type {Array<import('../geom/SimpleGeometry.js').default>} */ (rings);
 
-    this.description_ = this.createDescription();
-
-    this.setCoordinates(
-      /** @type {Array<import("../coordinate.js").Coordinate>} */ (
-        this.description_.coordinates
-      ),
-      opt_layout
-    );
-
-    /**
-     * @type {Array<number>}
-     * @protected
-     */
-    this.ends_ = this.computeEnds();
-
-    this.flatCoordinates = this.getOrientedFlatCoordinates();
-    this.updateRingCoordinates();
+    this.update();
   }
 
-  updateRingCoordinates() {
-    for (let i = 0; i < this.rings_.length; i++) {
-      let flatCoords;
+  /**
+   * Updates the polygon's internals.
+   * @private
+   */
+  update() {
+    this.orientRings();
+    this.updateFlatCoordinates();
+  }
 
-      if (i === 0) {
-        flatCoords = this.flatCoordinates.slice(0, this.ends_[i]);
-      } else {
-        flatCoords = this.flatCoordinates.slice(
-          this.ends_[i - 1],
-          this.ends_[i]
-        );
-      }
+  /**
+   * Updates the polygon's array of flat coordinates.
+   * @private
+   */
+  updateFlatCoordinates() {
+    this.flatCoordinates = this.rings_.reduce((previous, current) => {
+      return previous.concat(current.getFlatCoordinates());
+    }, []);
+  }
 
-      const ring = this.rings_[i];
-      if (ring.getType() === GeometryType.COMPOUND_CURVE) {
-        ring.setCoordinates_(
-          inflateCoordinates(flatCoords, 0, flatCoords.length, this.stride)
-        );
-      } else {
-        ring.setCoordinates(
-          inflateCoordinates(flatCoords, 0, flatCoords.length, this.stride)
-        );
-      }
+  /**
+   * Changes the orientation of the rings such that inner rings are oriented
+   * counterclockwise and the outer ring is oriented clockwise.
+   * @private
+   */
+  orientRings() {
+    if (this.rings_.length < 2) {
+      return;
     }
+    const outerRing = this.rings_[0];
+    if (!this.ringIsClockwiseOriented(outerRing)) {
+      outerRing.reverse();
+    }
+    this.rings_.slice(1).forEach((ring) => {
+      if (this.ringIsClockwiseOriented(ring)) {
+        ring.reverse();
+      }
+    });
   }
 
+  /**
+   * Returns whether the given ring is clockwise oriented.
+   * @private
+   * @param {import('../geom/SimpleGeometry.js').default} ring The given ring.
+   * @return {boolean} True if clockwise oriented, false otherwise.
+   */
+  ringIsClockwiseOriented(ring) {
+    const coords = ring.getFlatCoordinates();
+    const end = coords.length;
+    return linearRingIsClockwise(coords, 0, end, ring.getStride());
+  }
+
+  /**
+   * Returns the polygon's array of rings where the first ring concerns the
+   * outer ring and all subsequent rings the inner rings.
+   * @return {Array<import('../geom/SimpleGeometry.js').default>} The rings.
+   */
   getRings() {
     return this.rings_;
-  }
-
-  computeEnds() {
-    const ends = [];
-    let i = 0;
-    this.rings_.forEach((ring) => {
-      const numberOfCoordinates =
-        this.description_.ringDescriptions[i].length * this.stride;
-
-      if (ends.length === 0) {
-        ends.push(numberOfCoordinates);
-      } else {
-        ends.push(ends[i - 1] + numberOfCoordinates);
-      }
-
-      i++;
-    });
-
-    return ends;
-  }
-
-  /**
-   * @return {CurvePolygonDescription} compound curve description
-   */
-  getDescription() {
-    return this.description_;
-  }
-
-  /**
-   * @private
-   * @return {CurvePolygonDescription} compound curve description
-   */
-  createDescription() {
-    const data = new CurvePolygonDescription();
-
-    this.rings_.forEach((ring) => {
-      const ringCoordinates = ring.getCoordinates();
-      const ringDescription = new CurvePolygonRingDescription(
-        ring.getType(),
-        0,
-        ringCoordinates.length
-      );
-
-      if (data.coordinates.length > 0) {
-        ringDescription.start = data.coordinates.length;
-      }
-
-      data.coordinates = data.coordinates.concat(ringCoordinates);
-
-      data.ringDescriptions.push(ringDescription);
-    });
-
-    return data;
-  }
-
-  /**
-   * Set the coordinates of the polygon.
-   * @param {!Array<import("../coordinate.js").Coordinate>} coordinates Coordinates.
-   * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
-   * @api
-   */
-  setCoordinates(coordinates, opt_layout) {
-    this.setLayout(opt_layout, coordinates, 2);
-    if (!this.flatCoordinates) {
-      this.flatCoordinates = [];
-    }
-    this.flatCoordinates.length = deflateCoordinates(
-      this.flatCoordinates,
-      0,
-      coordinates,
-      this.stride
-    );
-    this.changed();
   }
 
   /**
@@ -184,58 +90,21 @@ class CurvePolygon extends SimpleGeometry {
    * @api
    */
   clone() {
-    const curvePolygon = new CurvePolygon(this.rings_, this.layout);
+    const curvePolygon = new CurvePolygon(
+      this.rings_.map((ring) => ring.clone()),
+      this.layout
+    );
     curvePolygon.applyProperties(this);
     return curvePolygon;
   }
 
+  /**
+   * Returns the type of this geometry.
+   * @return {import("./GeometryType.js").default} Geometry type.
+   * @api
+   */
   getType() {
     return GeometryType.CURVE_POLYGON;
-  }
-
-  /**
-   * @return {Array<number>} Ends.
-   */
-  getEnds() {
-    return this.ends_;
-  }
-
-  /**
-   * @param {number} squaredTolerance Squared tolerance.
-   * @return {CurvePolygon} Simplified Curve Polygon.
-   * @protected
-   */
-  getSimplifiedGeometryInternal(squaredTolerance) {
-    // At the moment, the geometry is not simplified
-    return this.clone();
-  }
-
-  /**
-   * @return {Array<number>} Oriented flat coordinates.
-   */
-  getOrientedFlatCoordinates() {
-    if (this.orientedRevision_ != this.getRevision()) {
-      const flatCoordinates = this.flatCoordinates;
-      const reversedRings = [];
-      if (linearRingsAreOriented(flatCoordinates, 0, this.ends_, this.stride)) {
-        this.orientedFlatCoordinates_ = flatCoordinates;
-      } else {
-        this.orientedFlatCoordinates_ = flatCoordinates.slice();
-        this.orientedFlatCoordinates_.length = orientLinearRings(
-          this.orientedFlatCoordinates_,
-          0,
-          this.ends_,
-          this.stride,
-          false,
-          reversedRings
-        );
-      }
-      this.orientedRevision_ = this.getRevision();
-      reversedRings.forEach((ringIndex) => {
-        this.rings_[ringIndex].reverse();
-      });
-    }
-    return this.orientedFlatCoordinates_;
   }
 
   /**
@@ -248,31 +117,25 @@ class CurvePolygon extends SimpleGeometry {
    * @api
    */
   applyTransform(transformFn) {
-    const rings = this.rings_;
-    for (let i = 0, ii = rings.length; i < ii; ++i) {
-      rings[i].applyTransform(transformFn);
-    }
+    this.rings_.forEach((ring) => {
+      ring.applyTransform(transformFn);
+    });
+    this.update();
     this.changed();
   }
 
   /**
-   * @param {import("../extent.js").Extent} extent Extent.
+   * Computes the polygon's extent and returns the result.
    * @protected
+   * @param {import("../extent.js").Extent} extent Extent.
    * @return {import("../extent.js").Extent} extent Extent.
    */
   computeExtent(extent) {
     createOrUpdateEmpty(extent);
-    const geometries = this.rings_;
-    for (let i = 0; i < geometries.length; ++i) {
-      extend(extent, geometries[i].getExtent());
-    }
+    this.rings_.forEach((ring) => {
+      extend(extent, ring.getExtent());
+    });
     return extent;
-  }
-
-  intersectsExtent(extent) {
-    throw Error('Method not yet supported.');
-    // eslint-disable-next-line no-unreachable
-    return false;
   }
 }
 

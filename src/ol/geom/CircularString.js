@@ -3,17 +3,13 @@
  */
 import GeometryType from './GeometryType.js';
 import SimpleGeometry from './SimpleGeometry.js';
-import {CircularArc} from './flat/CircularArc.js';
+import {CircularArc, Vector2} from './flat/CircularArc.js';
 import {assignClosestPoint, maxSquaredDelta} from './flat/closest.js';
 import {
   closestSquaredDistanceXY,
-  createEmpty,
   createOrUpdateFromFlatCoordinates,
-  extendFlatCoordinates,
-  intersects,
 } from '../extent.js';
 import {deflateCoordinates} from './flat/deflate.js';
-import {inflateCoordinates} from './flat/inflate.js';
 
 /**
  * @classdesc
@@ -23,8 +19,7 @@ import {inflateCoordinates} from './flat/inflate.js';
  */
 class CircularString extends SimpleGeometry {
   /**
-   * @param {Array<import("../coordinate.js").Coordinate>|Array<number>} coordinates Coordinates.
-   *     For internal use, flat coordinates in combination with `opt_layout` are also accepted.
+   * @param {Array<import("../coordinate.js").Coordinate>} coordinates Coordinates.
    * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
    */
   constructor(coordinates, opt_layout) {
@@ -42,19 +37,115 @@ class CircularString extends SimpleGeometry {
      */
     this.maxDeltaRevision_ = -1;
 
-    if (opt_layout !== undefined && !Array.isArray(coordinates[0])) {
-      this.setFlatCoordinates(
-        opt_layout,
-        /** @type {Array<number>} */ (coordinates)
-      );
-    } else {
-      this.setCoordinates(
-        /** @type {Array<import("../coordinate.js").Coordinate>} */ (
-          coordinates
-        ),
-        opt_layout
-      );
+    /**
+     * @private
+     * @type {Array<number>}
+     */
+    this.flatCenterOfCircleCoordinates = [];
+
+    /**
+     * @private
+     * @type {Array<number>}
+     */
+    this.drawableFlatCoordinates = [];
+
+    this.setCoordinates(coordinates, opt_layout);
+  }
+
+  /**
+   * Updates internals. Called whenever the geometry's flat coordinates have
+   * been changed.
+   * @private
+   */
+  update() {
+    this.updateFlatCenterOfCircleCoordinates();
+    this.updateDrawableFlatCoordinates();
+  }
+
+  /**
+   * Updates the center of circle for each arc in the string.
+   * @private
+   */
+  updateFlatCenterOfCircleCoordinates() {
+    const arcCount = this.arcCount();
+    this.flatCenterOfCircleCoordinates = new Array(arcCount * 2);
+    for (let i = 0; i < arcCount; ++i) {
+      const arc = this.arc(i);
+      const offset = i * 2;
+      const center = arc.centerOfCircle();
+      this.flatCenterOfCircleCoordinates[offset] = center.x;
+      this.flatCenterOfCircleCoordinates[offset + 1] = center.y;
     }
+  }
+
+  /**
+   * Constructs an array of flat coordinates which may be used for drawing
+   * purposes. Apart from start, middle, and end coordinates this array
+   * includes the coordinates for the center of circle for each arc.
+   * @private
+   */
+  updateDrawableFlatCoordinates() {
+    const arcCount = this.arcCount();
+    this.drawableFlatCoordinates = new Array(
+      this.getCoordinates().length * 2 + 2 * arcCount
+    );
+    const drawableCoords = this.drawableFlatCoordinates;
+    const stride = this.getStride();
+    const flatCoords = this.getFlatCoordinates();
+    for (let i = 0; i < arcCount; ++i) {
+      const offset = i * 6;
+      const startX = i * stride * 2;
+      const middleX = startX + stride;
+      const endX = middleX + stride;
+      // start coordinates
+      drawableCoords[offset] = flatCoords[startX];
+      drawableCoords[offset + 1] = flatCoords[startX + 1];
+      // middle coordinates
+      drawableCoords[offset + 2] = flatCoords[middleX];
+      drawableCoords[offset + 3] = flatCoords[middleX + 1];
+      // center of circle coordinates
+      const centerOfCircle = this.flatCenterOfCircle(i);
+      drawableCoords[offset + 4] = centerOfCircle[0];
+      drawableCoords[offset + 5] = centerOfCircle[1];
+      // end coordinates
+      drawableCoords[offset + 6] = flatCoords[endX];
+      drawableCoords[offset + 7] = flatCoords[endX + 1];
+    }
+  }
+
+  /**
+   * Returns the flat coordinates which may be used for drawing. Unlike the
+   * regular flat coordinates this includes the center coordinates for each
+   * circle of each arc.
+   * @return {Array<number>} The flat coordinates.
+   */
+  getDrawableFlatCoordinates() {
+    return this.drawableFlatCoordinates;
+  }
+
+  /**
+   * Returns the center of circle for the arc at the given index. The returned
+   * coordinates concern flat coordinates.
+   * @param {number} arcIndex The given arc index.
+   * @return {import("../coordinate.js").Coordinate} The center of circle.
+   */
+  flatCenterOfCircle(arcIndex) {
+    const start = arcIndex * 2;
+    return this.flatCenterOfCircleCoordinates.slice(start, start + 2);
+  }
+
+  /**
+   * Apply a transform function to the coordinates of the geometry.
+   * The geometry is modified in place.
+   * If you do not want the geometry modified in place, first `clone()` it and
+   * then use this function on the clone.
+   * @param {import("../proj.js").TransformFunction} transformFn Transform function.
+   * Called with a flat array of geometry coordinates.
+   * @api
+   */
+  applyTransform(transformFn) {
+    super.applyTransform(transformFn);
+    this.update();
   }
 
   /**
@@ -64,7 +155,7 @@ class CircularString extends SimpleGeometry {
    */
   clone() {
     const circularString = new CircularString(
-      this.flatCoordinates.slice(),
+      this.coordinates.map((coords) => coords.slice()),
       this.layout
     );
     circularString.applyProperties(this);
@@ -114,12 +205,7 @@ class CircularString extends SimpleGeometry {
    * @api
    */
   getCoordinates() {
-    return inflateCoordinates(
-      this.flatCoordinates,
-      0,
-      this.flatCoordinates.length,
-      this.stride
-    );
+    return this.coordinates;
   }
 
   /**
@@ -136,29 +222,36 @@ class CircularString extends SimpleGeometry {
    * @return {number} The amount of arcs.
    */
   arcCount() {
-    return Math.floor(this.flatCoordinates.length / this.stride / 2);
+    return Math.floor(this.coordinates.length / 2);
   }
 
   /**
    * Constructs and returns a CircularArc object for the arc at the given
    * index.
+   * @private
    * @param {number} index The arc's index.
    * @return {CircularArc} The constructed CircularArc.
    */
   arc(index) {
-    const arc = new CircularArc();
-    const offset = this.stride * 2 * index;
-    arc.begin.x = this.flatCoordinates[offset];
-    arc.begin.y = this.flatCoordinates[offset + 1];
-    arc.middle.x = this.flatCoordinates[offset + this.stride];
-    arc.middle.y = this.flatCoordinates[offset + this.stride + 1];
-    arc.end.x = this.flatCoordinates[offset + this.stride * 2];
-    arc.end.y = this.flatCoordinates[offset + this.stride * 2 + 1];
-    return arc;
+    const startX = this.stride * 2 * index;
+    const middleX = startX + this.stride;
+    const endX = startX + this.stride * 2;
+    return new CircularArc(
+      new Vector2(
+        this.flatCoordinates[startX],
+        this.flatCoordinates[startX + 1]
+      ),
+      new Vector2(
+        this.flatCoordinates[middleX],
+        this.flatCoordinates[middleX + 1]
+      ),
+      new Vector2(this.flatCoordinates[endX], this.flatCoordinates[endX + 1])
+    );
   }
 
   /**
    * Computes and returns the flat bounding coordinates for the given arc.
+   * @private
    * @param {CircularArc} arc The given arc.
    * @return {Array<number>} The computed bounding coordinates.
    */
@@ -166,18 +259,27 @@ class CircularString extends SimpleGeometry {
     const boundingCoords = [];
     const center = arc.centerOfCircle();
     const radius = arc.radius(center);
-    const angles = arc.angles();
+    const angles = arc.angles(center);
     const clockwise = arc.clockwise(angles);
-    arc.boundingCoords(center, radius, angles, clockwise).forEach((coords) => {
-      boundingCoords.push(coords.x);
-      boundingCoords.push(coords.y);
-    });
+    arc
+      .boundingCoords(
+        center,
+        radius,
+        angles.startAngle,
+        angles.endAngle,
+        clockwise
+      )
+      .forEach((coords) => {
+        boundingCoords.push(coords.x);
+        boundingCoords.push(coords.y);
+      });
     return boundingCoords;
   }
 
   /**
    * Computes and returns the flat bounding coordinates for the geometry as
    * a whole.
+   * @private
    * @return {Array<number>} The computed bounding coordinates.
    */
   flatBoundingCoordinates() {
@@ -193,8 +295,8 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
-   * @param {import("../extent.js").Extent} extent Extent.
    * @protected
+   * @param {import("../extent.js").Extent} extent Extent.
    * @return {import("../extent.js").Extent} extent Extent.
    */
   computeExtent(extent) {
@@ -209,37 +311,13 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
-   * Test if the geometry and the passed extent intersect.
-   * @param {import("../extent.js").Extent} extent Extent.
-   * @return {boolean} `true` if the geometry and the extent intersect.
-   * @api
-   */
-  intersectsExtent(extent) {
-    const count = this.arcCount();
-    for (let i = 0; i < count; ++i) {
-      const arc = this.arc(i);
-      const boundingCoords = this.flatBoundingArcCoordinates(arc);
-      const arcExtents = extendFlatCoordinates(
-        createEmpty(),
-        boundingCoords,
-        0,
-        boundingCoords.length,
-        2
-      );
-      if (intersects(extent, arcExtents)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
    * Set the coordinates of the circular string.
    * @param {!Array<import("../coordinate.js").Coordinate>} coordinates Coordinates.
    * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
    * @api
    */
   setCoordinates(coordinates, opt_layout) {
+    this.coordinates = coordinates;
     this.setLayout(opt_layout, coordinates, 1);
     if (!this.flatCoordinates) {
       this.flatCoordinates = [];
@@ -250,6 +328,7 @@ class CircularString extends SimpleGeometry {
       coordinates,
       this.stride
     );
+    this.update();
     this.changed();
   }
 }

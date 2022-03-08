@@ -3,7 +3,9 @@
  */
 import CanvasBuilder from './Builder.js';
 import CanvasInstruction, {
-  beginPathInstruction, closePathInstruction, fillInstruction,
+  beginPathInstruction,
+  closePathInstruction,
+  fillInstruction,
   strokeInstruction,
 } from './Instruction.js';
 import GeometryType from '../../geom/GeometryType.js';
@@ -20,22 +22,10 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   }
 
   /**
-   * @param {Array<number>} flatCoordinates Flat coordinates.
-   * @param {number} stride The stride.
-   */
-  appendFlatCircularStringCoordinates(flatCoordinates, stride) {
-    const coordinates = this.coordinates;
-    const length = flatCoordinates.length;
-    let myEnd = this.coordinates.length;
-    for (let i = 0; i < length; i += stride) {
-      coordinates[myEnd++] = flatCoordinates[i];
-      coordinates[myEnd++] = flatCoordinates[i + 1];
-    }
-  }
-
-  /**
-   * @param {import("../../geom/CircularString.js").default|import("../Feature.js").default} circularStringGeometry Circular string geometry.
-   * @param {import("../../Feature.js").FeatureLike} feature Feature.
+   * Adds instructions for drawing the provided circular string geometry.
+   * @param {import("../../geom/CircularString.js").default} circularStringGeometry
+   * The given geometry.
+   * @param {import("../../Feature.js").FeatureLike} feature The given feature.
    */
   drawCircularString(circularStringGeometry, feature) {
     const state = this.state;
@@ -46,35 +36,18 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
     }
     this.updateStrokeStyle(state, this.applyStroke);
     this.beginGeometry(circularStringGeometry, feature);
-    const startIndex = this.coordinates.length;
-    const coordinates = circularStringGeometry.getFlatCoordinates();
-    const stride = circularStringGeometry.getStride();
-    const endIndex = startIndex + (coordinates.length / stride) * 2;
-    this.appendFlatCircularStringCoordinates(coordinates, stride);
-    this.instructions.push([
-      CanvasInstruction.CIRCULAR_ARC,
-      startIndex,
-      endIndex,
-    ]);
+    this.appendCircularStringInstruction(
+      circularStringGeometry.getDrawableFlatCoordinates()
+    );
     this.endGeometry(feature);
   }
 
   /**
-   * @param {import("../../geom/GeometryType.js").default} geometryType The given geometry type.
-   * @return {CanvasInstruction} The canvas instruction.
+   * Adds instructions for drawing the provided compound curve geometry.
+   * @param {import("../../geom/CompoundCurve.js").default} compoundCurveGeometry
+   * The given geometry.
+   * @param {import("../../Feature.js").FeatureLike} feature The given feature.
    */
-  geometryTypeCanvasInstruction(geometryType) {
-    switch (geometryType) {
-      case GeometryType.CIRCULAR_STRING:
-        return CanvasInstruction.CIRCULAR_ARC;
-      case GeometryType.LINE_STRING:
-        return CanvasInstruction.MOVE_TO_LINE_TO;
-      default:
-        // Should not happen
-        return CanvasInstruction.MOVE_TO_LINE_TO;
-    }
-  }
-
   drawCompoundCurve(compoundCurveGeometry, feature) {
     const state = this.state;
     const strokeStyle = state.strokeStyle;
@@ -84,112 +57,165 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
     }
     this.updateStrokeStyle(state, this.applyStroke);
     this.beginGeometry(compoundCurveGeometry, feature);
-    const curveOffset = this.coordinates.length;
-    const coordinates = compoundCurveGeometry.getFlatCoordinates();
-    const stride = compoundCurveGeometry.getStride();
-    this.appendFlatCircularStringCoordinates(coordinates, stride);
-    this.appendCompoundCurveInstructions(
-      compoundCurveGeometry,
-      curveOffset,
-      stride
-    );
+    this.appendCompoundCurveInstructions(compoundCurveGeometry);
     this.endGeometry(feature);
   }
 
-  appendCompoundCurveInstructions(compoundCurveGeometry, curveOffset, stride) {
-    const geometryDescription = compoundCurveGeometry.getDescription();
-    geometryDescription.segmentDescriptions.forEach((segment) => {
-      const instruction = this.geometryTypeCanvasInstruction(segment.type);
-      const start = curveOffset + segment.start * stride;
-      const end = start + segment.length * stride;
-      this.instructions.push([instruction, start, end]);
-    });
-  }
-
+  /**
+   * Adds instructions for drawing the provided curve polygon geometry.
+   * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry
+   * The given geometry.
+   * @param {import("../../Feature.js").FeatureLike} feature The given feature.
+   */
   drawCurvePolygon(curvePolygonGeometry, feature) {
-    console.log("Drawing curve polygon");
     const state = this.state;
     const fillStyle = state.fillStyle;
     const strokeStyle = state.strokeStyle;
     if (fillStyle === undefined && strokeStyle === undefined) {
       return;
     }
-    this.setFillStrokeStyles_();
+    this.setFillStrokeStyles();
     this.beginGeometry(curvePolygonGeometry, feature);
-    // const ends = curvePolygonGeometry.getEnds();
-    // const flatCoordinates = curvePolygonGeometry.getOrientedFlatCoordinates();
-    // const stride = curvePolygonGeometry.getStride();
-    this.drawFlatCoordinatess_(curvePolygonGeometry);
-    //   flatCoordinates,
-    //   curvePolygonGeometry.getType(),
-    //   0,
-    //   /** @type {Array<number>} */ (ends),
-    //   stride
-    // );
+    this.appendCurvePolygonInstructions(curvePolygonGeometry);
     this.endGeometry(feature);
   }
 
   /**
+   * Appends the drawing instructions for drawing the given curve polygon
+   * geometry to the list of instructions.
    * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry Curve Polygon.
+   * @private
    */
-  drawFlatCoordinatess_(curvePolygonGeometry) {
+  appendCurvePolygonInstructions(curvePolygonGeometry) {
     const state = this.state;
     const fill = state.fillStyle !== undefined;
     const stroke = state.strokeStyle !== undefined;
-    //const numEnds = ends.length;
-    //this.instructions.push(beginPathInstruction);
-    let offset = 0;
-    const numOfRings =
-      curvePolygonGeometry.getDescription().ringDescriptions.length;
-
-    for (let i = 0; i < numOfRings; ++i) {
-      const ring = curvePolygonGeometry.getRings()[i];
-      const stride = ring.getStride();
-      const end = curvePolygonGeometry.getEnds()[i];
-      const myBegin = this.coordinates.length;
-      const myEnd = this.appendCoordinates(ring.getFlatCoordinates(), stride);
+    curvePolygonGeometry.getRings().forEach((ring) => {
+      // eslint-disable-next-line default-case
       switch (ring.getType()) {
         case GeometryType.LINE_STRING:
-          this.instructions.push([
-            CanvasInstruction.MOVE_TO_LINE_TO,
-            myBegin,
-            myEnd,
-          ]);
+          this.appendLineStringInstruction(
+            ring.getFlatCoordinates(),
+            ring.getStride()
+          );
           break;
-
         case GeometryType.CIRCULAR_STRING:
-          this.instructions.push([
-            CanvasInstruction.CIRCULAR_ARC,
-            myBegin,
-            myEnd,
-          ]);
+          this.appendCircularStringInstruction(
+            /** @type {import("../../geom/CircularString.js").default} **/ (
+              ring
+            ).getDrawableFlatCoordinates()
+          );
           break;
-
         case GeometryType.COMPOUND_CURVE:
-          const compoundCurve =
-            /** @type {import('../../geom/CompoundCurve.js').default} */ (ring);
-          this.appendCompoundCurveInstructions(compoundCurve, myBegin, stride);
+          this.appendCompoundCurveInstructions(
+            /** @type {import("../../geom/CompoundCurve.js").default} */ (ring)
+          );
           break;
-
-        default:
-          throw new Error('Geometry type not supported in curve polygon');
       }
       if (stroke) {
-        // Performance optimization: only call closePath() when we have a stroke.
-        // Otherwise the ring is closed already (see appendFlatLineCoordinates above).
         this.instructions.push(closePathInstruction);
       }
-      offset = end;
-    }
+    });
     if (fill) {
       this.instructions.push(fillInstruction);
     }
     if (stroke) {
       this.instructions.push(strokeInstruction);
     }
-    return offset;
   }
 
+  /**
+   * Appends the drawing instructions for drawing the given compound curve
+   * geometry to the list of instructions.
+   * @param {import("../../geom/CompoundCurve.js").default} compoundCurveGeometry
+   * The compound curve geometry for which to append instructions.
+   * @private
+   */
+  appendCompoundCurveInstructions(compoundCurveGeometry) {
+    let geometryFlatCoords = [];
+    compoundCurveGeometry.getGeometries().forEach((geometry, index) => {
+      const startIndex =
+        index > 0 ? this.coordinates.length - 2 : this.coordinates.length;
+      // eslint-disable-next-line default-case
+      switch (geometry.getType()) {
+        case GeometryType.CIRCULAR_STRING:
+          const circularString =
+            /** @type {import("../../geom/CircularString.js").default} **/ (
+              geometry
+            );
+          geometryFlatCoords =
+            index > 0
+              ? circularString.getDrawableFlatCoordinates().slice(2)
+              : circularString.getDrawableFlatCoordinates();
+          this.appendCircularStringInstruction(geometryFlatCoords, startIndex);
+          break;
+        case GeometryType.LINE_STRING:
+          geometryFlatCoords =
+            index > 0
+              ? geometry.getFlatCoordinates().slice(geometry.getStride())
+              : geometry.getFlatCoordinates();
+          this.appendLineStringInstruction(
+            geometryFlatCoords,
+            geometry.getStride(),
+            startIndex
+          );
+          break;
+      }
+    });
+  }
+
+  /**
+   * Appends a circular string instruction given the string's coordinates. The
+   * coordinates are appended as well. They are expected to contain start,
+   * middle, center of circle, and end coordinates for each arc in this
+   * specific order.
+   * @param {Array<number>} flatCoordinates The string's coordinates.
+   * @param {number} startIndex The coordinate start index of the
+   * MOVE_TO_ARC_TO instruction.
+   * @private
+   */
+  appendCircularStringInstruction(
+    flatCoordinates,
+    startIndex = this.coordinates.length
+  ) {
+    const endIndex = this.appendCoordinates(flatCoordinates, 2);
+    this.instructions.push([
+      CanvasInstruction.MOVE_TO_ARC_TO,
+      startIndex,
+      endIndex,
+    ]);
+  }
+
+  /**
+   * Appends a line string instruction given the string's coordinates. The
+   * coordinates are appended as well.
+   * @param {Array<number>} flatCoordinates The line string's coordinates.
+   * @param {number} stride The coordinates' stride.
+   * @param {number} startIndex The coordinate start index of the
+   * MOVE_TO_LINE_TO instruction.
+   * @private
+   */
+  appendLineStringInstruction(
+    flatCoordinates,
+    stride,
+    startIndex = this.coordinates.length
+  ) {
+    const endIndex = this.appendCoordinates(flatCoordinates, stride);
+    this.instructions.push([
+      CanvasInstruction.MOVE_TO_LINE_TO,
+      startIndex,
+      endIndex,
+    ]);
+  }
+
+  /**
+   * Appends the provided coordinates with the given stride to the list of
+   * coordinates used for drawing.
+   * @param {Array<number>} flatCoordinates The given coordinates.
+   * @param {number} stride The given stride.
+   * @return {number} The coordinates array's new length.
+   * @private
+   */
   appendCoordinates(flatCoordinates, stride) {
     const coordinates = this.coordinates;
     const length = flatCoordinates.length;
@@ -204,7 +230,7 @@ class CanvasCircularStringBuilder extends CanvasBuilder {
   /**
    * @private
    */
-  setFillStrokeStyles_() {
+  setFillStrokeStyles() {
     const state = this.state;
     const fillStyle = state.fillStyle;
     if (fillStyle !== undefined) {

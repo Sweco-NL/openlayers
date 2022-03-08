@@ -1,11 +1,11 @@
 /**
- * Computes and returns the angle at a specific vector wrt. the given origin.
+ * Computes and returns the CCW angle at a specific vector wrt. the given origin.
  * The angle is returned in radians and ranges from 0 to +2PI.
  * @param {Vector2} origin The given origin.
  * @param {Vector2} at The vector for which to compute the angle.
  * @return {number} The computed angle.
  */
-function angleFromOrigin(origin, at) {
+export function angleFromOrigin(origin, at) {
   let angle = Math.atan2(at.y - origin.y, at.x - origin.x);
 
   if (angle < 0) {
@@ -183,11 +183,18 @@ export class CircularArc {
    * construct a bounding box for the arc.
    * @param {Vector2} centerOfCircle The circle's center coordinates.
    * @param {number} radius The circle's radius.
-   * @param {{startAngle: number, endAngle: number, middleAngle: number}} angles The arc's angles.
+   * @param {number} startAngle The arc's start angle.
+   * @param {number} endAngle The arc's end angle.
    * @param {boolean} clockwise True if the arc is drawn in clockwise direction, false otherwise.
    * @return {Array<Vector2>} The array of bounding coordinates.
    */
-  boundingCoords = (centerOfCircle, radius, angles, clockwise) => {
+  boundingCoords = (
+    centerOfCircle,
+    radius,
+    startAngle,
+    endAngle,
+    clockwise
+  ) => {
     const extremes = [
       centerOfCircle.add(new Vector2(0, radius)),
       centerOfCircle.add(new Vector2(radius, 0)),
@@ -200,13 +207,13 @@ export class CircularArc {
     }
 
     const coords = [this.begin, this.end];
-    const startAngle = clockwise ? angles.startAngle : angles.endAngle;
-    const endAngle = clockwise ? angles.endAngle : angles.startAngle;
-    const startToEnd = this.clockwiseDistance(startAngle, endAngle);
+    const start = !clockwise ? startAngle : endAngle;
+    const end = !clockwise ? endAngle : startAngle;
+    const startToEnd = this.angleDistance(start, end);
 
     extremes.forEach((extreme) => {
       const angle = angleFromOrigin(centerOfCircle, extreme);
-      const startToExtreme = this.clockwiseDistance(startAngle, angle);
+      const startToExtreme = this.angleDistance(start, angle);
 
       if (startToExtreme < startToEnd) {
         coords.push(extreme);
@@ -224,41 +231,19 @@ export class CircularArc {
   radius = (center) => this.begin.subtract(center).magnitude();
 
   /**
-   * Computes and returns everything necessary in order to draw this arc.
-   * @return {{middle: Vector2, startAngle: number, centerOfCircle: Vector2, clockwise: boolean, endAngle: number, end: Vector2, radius: number, begin: Vector2}}
-   * All the information required to draw the arc.
-   */
-  drawable = () => {
-    const center = this.centerOfCircle();
-    const angles = this.angles();
-
-    return {
-      begin: this.begin,
-      middle: this.middle,
-      end: this.end,
-      centerOfCircle: center,
-      radius: this.radius(center),
-      startAngle: angles.startAngle,
-      endAngle: angles.endAngle,
-      clockwise: this.clockwise(angles),
-    };
-  };
-
-  /**
    * Returns if the arc concerns a full circle.
    * @return {boolean} True if so, false otherwise.
    */
   fullCircle = () => this.begin.equals(this.end);
 
   /**
-   * Computes and returns the clockwise distance from the given start angle
+   * Computes and returns the CCW distance from the given start angle
    * to the given end angle.
    * @param {number} start The angle in radians.
    * @param {number} end The angle in radians.
    * @return {number} The distance in radians.
    */
-  clockwiseDistance = (start, end) =>
-    (end - start + 2 * Math.PI) % (2 * Math.PI);
+  angleDistance = (start, end) => (end - start + 2 * Math.PI) % (2 * Math.PI);
 
   /**
    * Computes and returns if the arc moves in clockwise direction.
@@ -266,26 +251,24 @@ export class CircularArc {
    * @return {boolean} True if clockwise, false otherwise.
    */
   clockwise = (angles) => {
-    // compute the clockwise distance from start to middle and from start to end
-    const startToMiddle = this.clockwiseDistance(
+    // compute the CCW distance from start to middle and from start to end
+    const startToMiddle = this.angleDistance(
       angles.startAngle,
       angles.middleAngle
     );
-    const startToEnd = this.clockwiseDistance(
-      angles.startAngle,
-      angles.endAngle
-    );
+    const startToEnd = this.angleDistance(angles.startAngle, angles.endAngle);
 
-    // clockwise if in clockwise direction we reach middle before we reach end
-    return startToMiddle < startToEnd;
+    // clockwise if in CCW direction we reach end before we reach middle
+    return startToEnd < startToMiddle;
   };
 
   /**
    * Computes and returns the angles at all three positions with the center
    * of the circle as their origin.
+   * @param {Vector2} center The optional center of the circle, if already known, otherwise it will be computed.
    * @return {{startAngle: number, endAngle: number, middleAngle: number}} The computed angles.
    */
-  angles = () => {
+  angles = (center) => {
     if (this.fullCircle()) {
       return {
         startAngle: 0,
@@ -294,12 +277,12 @@ export class CircularArc {
       };
     }
 
-    const center = this.centerOfCircle();
+    const centerOfCircle = center ? center : this.centerOfCircle();
 
     return {
-      startAngle: angleFromOrigin(center, this.begin),
-      middleAngle: angleFromOrigin(center, this.middle),
-      endAngle: angleFromOrigin(center, this.end),
+      startAngle: angleFromOrigin(centerOfCircle, this.begin),
+      middleAngle: angleFromOrigin(centerOfCircle, this.middle),
+      endAngle: angleFromOrigin(centerOfCircle, this.end),
     };
   };
 
