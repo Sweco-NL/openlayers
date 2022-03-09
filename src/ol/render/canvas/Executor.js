@@ -2,6 +2,7 @@
  * @module ol/render/canvas/Executor
  */
 import CanvasInstruction from './Instruction.js';
+import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
 import {TEXT_ALIGN} from './TextBuilder.js';
 import {
   apply as applyTransform,
@@ -18,6 +19,7 @@ import {
   getTextDimensions,
   measureAndCacheTextWidth,
 } from '../canvas.js';
+import {distance} from '../../coordinate.js';
 import {drawTextOnPath} from '../../geom/flat/textpath.js';
 import {equals} from '../../array.js';
 import {lineStringLength} from '../../geom/flat/length.js';
@@ -735,6 +737,58 @@ class Executor {
             context.beginPath();
             prevX = NaN;
             prevY = NaN;
+          }
+          ++i;
+          break;
+        case CanvasInstruction.MOVE_TO_ARC_TO:
+          d = /** @type {number} */ instruction[1]; // start arc
+          dd = /** @type {number} */ instruction[2] - 2; // end
+          for (let arcIndex = 0; d < dd; d += 6, ++arcIndex) {
+            const beginX = pixelCoordinates[d];
+            const beginY = pixelCoordinates[d + 1];
+            const middleX = pixelCoordinates[d + 2];
+            const middleY = pixelCoordinates[d + 3];
+            const centerOfCircleX = pixelCoordinates[d + 4];
+            const centerOfCircleY = pixelCoordinates[d + 5];
+            const endX = pixelCoordinates[d + 6];
+            const endY = pixelCoordinates[d + 7];
+            const arc = new CircularArc(
+              new Vector2(beginX, beginY),
+              new Vector2(middleX, middleY),
+              new Vector2(endX, endY)
+            );
+            const angles = arc.angles(
+              new Vector2(centerOfCircleX, centerOfCircleY)
+            );
+            const clockwise = arc.clockwise(angles);
+            const fullCircle = arc.fullCircle();
+            const radius = distance(
+              [beginX, beginY],
+              [centerOfCircleX, centerOfCircleY]
+            );
+            if (arcIndex === 0) {
+              let moveToX = beginX;
+              let moveToY = beginY;
+              if (fullCircle) {
+                moveToX = centerOfCircleX + radius;
+                moveToY = centerOfCircleY;
+              }
+              moveToX = (moveToX + 0.5) | 0;
+              moveToY = (moveToY + 0.5) | 0;
+              if (moveToX !== prevX || moveToY !== prevY) {
+                context.moveTo(moveToX, moveToY);
+              }
+            }
+            context.arc(
+              centerOfCircleX,
+              centerOfCircleY,
+              radius,
+              angles.startAngle,
+              angles.endAngle,
+              clockwise
+            );
+            prevX = (endX + 0.5) | 0;
+            prevY = (endY + 0.5) | 0;
           }
           ++i;
           break;
