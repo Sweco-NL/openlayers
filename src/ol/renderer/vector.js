@@ -280,7 +280,7 @@ function renderLineStringGeometry(
 
 /**
  * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
- * @param {import("../geom/CircularString.js").default|import("../render/Feature.js").default} geometry Geometry.
+ * @param {import("../geom/CircularString.js").default} geometry Geometry.
  * @param {import("../style/Style.js").default} style Style.
  * @param {import("../Feature.js").FeatureLike} feature Feature.
  * @param {import("../render/canvas/BuilderGroup.js").default} [opt_declutterBuilderGroup] Builder for decluttering.
@@ -330,6 +330,13 @@ function renderCompoundCurveGeometry(
   }
 }
 
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").default} feature Feature.
+ * @param {import("../render/canvas/BuilderGroup.js").default} [opt_declutterBuilderGroup] Builder for decluttering.
+ */
 function renderCurvePolygonGeometry(
   builderGroup,
   geometry,
