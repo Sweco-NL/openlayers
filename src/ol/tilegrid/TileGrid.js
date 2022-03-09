@@ -27,7 +27,7 @@ const DECIMALS = 5;
 /**
  * @typedef {Object} Options
  * @property {import("../extent.js").Extent} [extent] Extent for the tile grid. No tiles outside this
- * extent will be requested by {@link module:ol/source/Tile} sources. When no `origin` or
+ * extent will be requested by {@link module:ol/source/Tile~TileSource} sources. When no `origin` or
  * `origins` are configured, the `origin` will be set to the top-left corner of the extent.
  * @property {number} [minZoom=0] Minimum zoom.
  * @property {import("../coordinate.js").Coordinate} [origin] The tile grid origin, i.e. where the `x`
@@ -117,7 +117,7 @@ class TileGrid {
 
     /**
      * @private
-     * @type {import("../coordinate.js").Coordinate}
+     * @type {import("../coordinate.js").Coordinate|null}
      */
     this.origin_ = options.origin !== undefined ? options.origin : null;
 
@@ -603,7 +603,7 @@ class TileGrid {
   /**
    * Get the tile size for a zoom level. The type of the return value matches the
    * `tileSize` or `tileSizes` that the tile grid was configured with. To always
-   * get an `import("../size.js").Size`, run the result through `import("../size.js").Size.toSize()`.
+   * get an {@link import("../size.js").Size}, run the result through {@link module:ol/size.toSize}.
    * @param {number} z Z.
    * @return {number|import("../size.js").Size} Tile size.
    * @api

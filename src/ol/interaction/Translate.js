@@ -34,9 +34,9 @@ const TranslateEventType = {
 };
 
 /**
- * A function that takes an {@link module:ol/Feature} or
- * {@link module:ol/render/Feature} and an
- * {@link module:ol/layer/Layer} and returns `true` if the feature may be
+ * A function that takes an {@link module:ol/Feature~Feature} or
+ * {@link module:ol/render/Feature~RenderFeature} and an
+ * {@link module:ol/layer/Layer~Layer} and returns `true` if the feature may be
  * translated or `false` otherwise.
  * @typedef {function(import("../Feature.js").FeatureLike, import("../layer/Layer.js").default<import("../source/Source").default>):boolean} FilterFunction
  */
@@ -55,8 +55,8 @@ const TranslateEventType = {
  * absent, all visible layers will be considered translatable.
  * Not used if `features` is provided.
  * @property {FilterFunction} [filter] A function
- * that takes an {@link module:ol/Feature} and an
- * {@link module:ol/layer/Layer} and returns `true` if the feature may be
+ * that takes an {@link module:ol/Feature~Feature} and an
+ * {@link module:ol/layer/Layer~Layer} and returns `true` if the feature may be
  * translated or `false` otherwise. Not used if `features` is provided.
  * @property {number} [hitTolerance=0] Hit-detection tolerance. Pixels inside the radius around the given position
  * will be checked for features.
@@ -102,7 +102,7 @@ export class TranslateEvent extends Event {
     this.startCoordinate = startCoordinate;
 
     /**
-     * Associated {@link module:ol/MapBrowserEvent}.
+     * Associated {@link module:ol/MapBrowserEvent~MapBrowserEvent}.
      * @type {import("../MapBrowserEvent.js").default}
      * @api
      */
@@ -169,7 +169,7 @@ class Translate extends PointerInteraction {
     this.startCoordinate_ = null;
 
     /**
-     * @type {Collection<import("../Feature.js").default>}
+     * @type {Collection<import("../Feature.js").default>|null}
      * @private
      */
     this.features_ = options.features !== undefined ? options.features : null;

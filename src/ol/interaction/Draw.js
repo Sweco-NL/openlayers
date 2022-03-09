@@ -257,14 +257,14 @@ class Draw extends PointerInteraction {
 
     /**
      * Target source for drawn features.
-     * @type {VectorSource}
+     * @type {VectorSource|null}
      * @private
      */
     this.source_ = options.source ? options.source : null;
 
     /**
      * Target collection for drawn features.
-     * @type {import("../Collection.js").default<Feature>}
+     * @type {import("../Collection.js").default<Feature>|null}
      * @private
      */
     this.features_ = options.features ? options.features : null;
@@ -421,7 +421,7 @@ class Draw extends PointerInteraction {
 
     /**
      * Sketch feature.
-     * @type {Feature}
+     * @type {Feature<import('../geom/SimpleGeometry.js').default>}
      * @private
      */
     this.sketchFeature_ = null;
@@ -529,7 +529,7 @@ class Draw extends PointerInteraction {
   }
 
   /**
-   * Handles the {@link module:ol/MapBrowserEvent map browser event} and may actually draw or finish the drawing.
+   * Handles the {@link module:ol/MapBrowserEvent~MapBrowserEvent map browser event} and may actually draw or finish the drawing.
    * @param {import("../MapBrowserEvent.js").default} event Map browser event.
    * @return {boolean} `false` to stop event propagation.
    * @api
@@ -1022,7 +1022,7 @@ class Draw extends PointerInteraction {
 
   /**
    * Stop drawing without adding the sketch feature to the target layer.
-   * @return {Feature} The sketch feature (or null if none).
+   * @return {Feature<import("../geom/SimpleGeometry.js").default>|null} The sketch feature (or null if none).
    * @private
    */
   abortDrawing_() {
@@ -1165,7 +1165,7 @@ function getDefaultStyleFunction() {
 /**
  * Create a `geometryFunction` for `type: 'Circle'` that will create a regular
  * polygon with a user specified number of sides and start angle instead of a
- * `import("../geom/Circle.js").Circle` geometry.
+ * {@link import("../geom/Circle.js").Circle} geometry.
  * @param {number} [opt_sides] Number of sides of the regular polygon.
  *     Default is 32.
  * @param {number} [opt_angle] Angle of the first point in counter-clockwise

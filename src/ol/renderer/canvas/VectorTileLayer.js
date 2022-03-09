@@ -73,6 +73,7 @@ const VECTOR_REPLAYS = {
  * @classdesc
  * Canvas renderer for vector tile layers.
  * @api
+ * @extends {CanvasTileLayerRenderer<import("../../layer/VectorTile.js").default>}
  */
 class CanvasVectorTileLayerRenderer extends CanvasTileLayerRenderer {
   /**
@@ -662,6 +663,12 @@ class CanvasVectorTileLayerRenderer extends CanvasTileLayerRenderer {
     const replayTypes = VECTOR_REPLAYS[renderMode];
     const viewState = frameState.viewState;
     const rotation = viewState.rotation;
+    const tileSource = layer.getSource();
+    const tileGrid = tileSource.getTileGridForProjection(viewState.projection);
+    const z = tileGrid.getZForResolution(
+      viewState.resolution,
+      tileSource.zDirection
+    );
 
     const tiles = this.renderedTiles;
     const clips = [];
@@ -670,43 +677,49 @@ class CanvasVectorTileLayerRenderer extends CanvasTileLayerRenderer {
       const tile = /** @type {import("../../VectorRenderTile.js").default} */ (
         tiles[i]
       );
+      const executorGroups = tile.executorGroups[getUid(layer)].filter(
+        (group) => group.hasExecutors(replayTypes)
+      );
+      if (executorGroups.length === 0) {
+        continue;
+      }
       const transform = this.getTileRenderTransform(tile, frameState);
-      const executorGroups = tile.executorGroups[getUid(layer)];
-      let clipped = false;
-      for (let t = 0, tt = executorGroups.length; t < tt; ++t) {
-        const executorGroup = executorGroups[t];
-        if (!executorGroup.hasExecutors(replayTypes)) {
-          // sourceTile has no instructions of the types we want to render
-          continue;
-        }
-        const currentZ = tile.tileCoord[0];
-        let currentClip;
-        if (!clipped) {
-          currentClip = executorGroup.getClipCoords(transform);
-          if (currentClip) {
-            context.save();
-
-            // Create a clip mask for regions in this low resolution tile that are
-            // already filled by a higher resolution tile
-            for (let j = 0, jj = clips.length; j < jj; ++j) {
-              const clip = clips[j];
-              if (currentZ < clipZs[j]) {
-                context.beginPath();
-                // counter-clockwise (outer ring) for current tile
-                context.moveTo(currentClip[0], currentClip[1]);
-                context.lineTo(currentClip[2], currentClip[3]);
-                context.lineTo(currentClip[4], currentClip[5]);
-                context.lineTo(currentClip[6], currentClip[7]);
-                // clockwise (inner ring) for higher resolution tile
-                context.moveTo(clip[6], clip[7]);
-                context.lineTo(clip[4], clip[5]);
-                context.lineTo(clip[2], clip[3]);
-                context.lineTo(clip[0], clip[1]);
-                context.clip();
-              }
+      const currentZ = tile.tileCoord[0];
+      let contextSaved = false;
+      // Clip mask for regions in this tile that already filled by a higher z tile
+      const currentClip = executorGroups[0].getClipCoords(transform);
+      for (let j = 0, jj = clips.length; j < jj; ++j) {
+        if (z !== currentZ && currentZ < clipZs[j]) {
+          const clip = clips[j];
+          if (
+            intersects(
+              [currentClip[0], currentClip[3], currentClip[4], currentClip[7]],
+              [clip[0], clip[3], clip[4], clip[7]]
+            )
+          ) {
+            if (!contextSaved) {
+              context.save();
+              contextSaved = true;
             }
+            context.beginPath();
+            // counter-clockwise (outer ring) for current tile
+            context.moveTo(currentClip[0], currentClip[1]);
+            context.lineTo(currentClip[2], currentClip[3]);
+            context.lineTo(currentClip[4], currentClip[5]);
+            context.lineTo(currentClip[6], currentClip[7]);
+            // clockwise (inner ring) for higher z tile
+            context.moveTo(clip[6], clip[7]);
+            context.lineTo(clip[4], clip[5]);
+            context.lineTo(clip[2], clip[3]);
+            context.lineTo(clip[0], clip[1]);
+            context.clip();
           }
         }
+      }
+      clips.push(currentClip);
+      clipZs.push(currentZ);
+      for (let t = 0, tt = executorGroups.length; t < tt; ++t) {
+        const executorGroup = executorGroups[t];
         executorGroup.execute(
           context,
           1,
@@ -715,12 +728,9 @@ class CanvasVectorTileLayerRenderer extends CanvasTileLayerRenderer {
           hifi,
           replayTypes
         );
-        if (!clipped && currentClip) {
-          context.restore();
-          clips.push(currentClip);
-          clipZs.push(currentZ);
-          clipped = true;
-        }
+      }
+      if (contextSaved) {
+        context.restore();
       }
     }
     context.globalAlpha = alpha;

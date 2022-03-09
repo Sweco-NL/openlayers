@@ -264,8 +264,8 @@ function releaseCanvas(key) {
  * ### Specifying attributes
  *
  *   The GPU only receives the data as arrays of numbers. These numbers must be handled differently depending on what it describes (position, texture coordinate...).
- *   Attributes are used to specify these uses. Use {@link enableAttributeArray_} and either
- *   the default attribute names in {@link module:ol/webgl/Helper.DefaultAttrib} or custom ones.
+ *   Attributes are used to specify these uses. Specify the attribute names with
+ *   {@link module:ol/webgl/Helper~WebGLHelper#enableAttributes enableAttributes()} (see code snippet below).
  *
  *   Please note that you will have to specify the type and offset of the attributes in the data array. You can refer to the documentation of [WebGLRenderingContext.vertexAttribPointer](https://developer.mozilla.org/en-US/docs/Web/API/WebGLRenderingContext/vertexAttribPointer) for more explanation.
  *   ```js
@@ -302,7 +302,6 @@ function releaseCanvas(key) {
  *   ```
  *
  * For an example usage of this class, refer to {@link module:ol/renderer/webgl/PointsLayer~WebGLPointsLayerRenderer}.
- *
  *
  * @api
  */
@@ -469,7 +468,7 @@ class WebGLHelper extends Disposable {
    * Get a WebGL extension.  If the extension is not supported, null is returned.
    * Extensions are cached after they are enabled for the first time.
    * @param {string} name The extension name.
-   * @return {Object} The extension or null if not supported.
+   * @return {Object|null} The extension or null if not supported.
    */
   getExtension(name) {
     if (name in this.extensionCache_) {
@@ -960,6 +959,15 @@ class WebGLHelper extends Disposable {
    */
   setUniformFloatValue(uniform, value) {
     this.getGL().uniform1f(this.getUniformLocation(uniform), value);
+  }
+
+  /**
+   * Give a value for a vec4 uniform
+   * @param {string} uniform Uniform name
+   * @param {Array<number>} value Array of length 4.
+   */
+  setUniformFloatVec4(uniform, value) {
+    this.getGL().uniform4fv(this.getUniformLocation(uniform), value);
   }
 
   /**

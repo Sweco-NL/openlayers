@@ -127,7 +127,7 @@ class ImageSource extends Source {
 
     /**
      * @private
-     * @type {Array<number>}
+     * @type {Array<number>|null}
      */
     this.resolutions_ =
       options.resolutions !== undefined ? options.resolutions : null;
@@ -146,7 +146,7 @@ class ImageSource extends Source {
   }
 
   /**
-   * @return {Array<number>} Resolutions.
+   * @return {Array<number>|null} Resolutions.
    */
   getResolutions() {
     return this.resolutions_;
@@ -240,27 +240,25 @@ class ImageSource extends Source {
    */
   handleImageChange(event) {
     const image = /** @type {import("../Image.js").default} */ (event.target);
+    let type;
     switch (image.getState()) {
       case ImageState.LOADING:
         this.loading = true;
-        this.dispatchEvent(
-          new ImageSourceEvent(ImageSourceEventType.IMAGELOADSTART, image)
-        );
+        type = ImageSourceEventType.IMAGELOADSTART;
         break;
       case ImageState.LOADED:
         this.loading = false;
-        this.dispatchEvent(
-          new ImageSourceEvent(ImageSourceEventType.IMAGELOADEND, image)
-        );
+        type = ImageSourceEventType.IMAGELOADEND;
         break;
       case ImageState.ERROR:
         this.loading = false;
-        this.dispatchEvent(
-          new ImageSourceEvent(ImageSourceEventType.IMAGELOADERROR, image)
-        );
+        type = ImageSourceEventType.IMAGELOADERROR;
         break;
       default:
-      // pass
+        return;
+    }
+    if (this.hasListener(type)) {
+      this.dispatchEvent(new ImageSourceEvent(type, image));
     }
   }
 }

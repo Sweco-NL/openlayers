@@ -7,9 +7,11 @@ import RenderEvent from '../../render/Event.js';
 import RenderEventType from '../../render/EventType.js';
 import WebGLHelper from '../../webgl/Helper.js';
 import {
+  apply as applyTransform,
   compose as composeTransform,
   create as createTransform,
 } from '../../transform.js';
+import {containsCoordinate} from '../../extent.js';
 
 /**
  * @enum {string}
@@ -73,6 +75,12 @@ class WebGLLayerRenderer extends LayerRenderer {
 
     /**
      * @private
+     * @type {CanvasRenderingContext2D}
+     */
+    this.pixelContext_ = null;
+
+    /**
+     * @private
      */
     this.postProcesses_ = options.postProcesses;
 
@@ -87,7 +95,7 @@ class WebGLLayerRenderer extends LayerRenderer {
      */
     this.helper;
 
-    layer.addChangeListener(LayerProperty.MAP, this.removeHelper_.bind(this));
+    layer.addChangeListener(LayerProperty.MAP, this.removeHelper.bind(this));
 
     this.dispatchPreComposeEvent = this.dispatchPreComposeEvent.bind(this);
     this.dispatchPostComposeEvent = this.dispatchPostComposeEvent.bind(this);
@@ -140,7 +148,10 @@ class WebGLLayerRenderer extends LayerRenderer {
     }
   }
 
-  removeHelper_() {
+  /**
+   * @protected
+   */
+  removeHelper() {
     if (this.helper) {
       this.helper.dispose();
       delete this.helper;
@@ -153,7 +164,7 @@ class WebGLLayerRenderer extends LayerRenderer {
    * @return {boolean} Layer is ready to be rendered.
    */
   prepareFrame(frameState) {
-    if (this.getLayer().getSource()) {
+    if (this.getLayer().getRenderSource()) {
       let incrementGroup = true;
       let groupNumber = -1;
       let className;
@@ -179,9 +190,7 @@ class WebGLLayerRenderer extends LayerRenderer {
         'map/' + frameState.mapId + '/group/' + groupNumber;
 
       if (!this.helper || !this.helper.canvasCacheKeyMatches(canvasCacheKey)) {
-        if (this.helper) {
-          this.helper.dispose();
-        }
+        this.removeHelper();
 
         this.helper = new WebGLHelper({
           postProcesses: this.postProcesses_,
@@ -219,7 +228,7 @@ class WebGLLayerRenderer extends LayerRenderer {
    * Clean up.
    */
   disposeInternal() {
-    this.removeHelper_();
+    this.removeHelper();
     super.disposeInternal();
   }
 
@@ -269,6 +278,68 @@ class WebGLLayerRenderer extends LayerRenderer {
    */
   postRender(context, frameState) {
     this.dispatchRenderEvent_(RenderEventType.POSTRENDER, context, frameState);
+  }
+
+  /**
+   * @param {import("../../pixel.js").Pixel} pixel Pixel.
+   * @param {import("../../PluggableMap.js").FrameState} frameState FrameState.
+   * @param {number} hitTolerance Hit tolerance in pixels.
+   * @return {Uint8ClampedArray|Uint8Array} The result.  If there is no data at the pixel
+   *    location, null will be returned.  If there is data, but pixel values cannot be
+   *    returned, and empty array will be returned.
+   */
+  getDataAtPixel(pixel, frameState, hitTolerance) {
+    const renderPixel = applyTransform(
+      [frameState.pixelRatio, 0, 0, frameState.pixelRatio, 0, 0],
+      pixel.slice()
+    );
+    const gl = this.helper.getGL();
+    if (!gl) {
+      return null;
+    }
+    const layer = this.getLayer();
+    const layerExtent = layer.getExtent();
+    if (layerExtent) {
+      const renderCoordinate = applyTransform(
+        frameState.pixelToCoordinateTransform,
+        pixel.slice()
+      );
+
+      /** get only data inside of the layer extent */
+      if (!containsCoordinate(layerExtent, renderCoordinate)) {
+        return null;
+      }
+    }
+
+    const attributes = gl.getContextAttributes();
+    if (!attributes || !attributes.preserveDrawingBuffer) {
+      // we assume there is data at the given pixel (although there might not be)
+      return new Uint8Array();
+    }
+
+    const x = Math.round(renderPixel[0]);
+    const y = Math.round(renderPixel[1]);
+    let pixelContext = this.pixelContext_;
+    if (!pixelContext) {
+      const pixelCanvas = document.createElement('canvas');
+      pixelCanvas.width = 1;
+      pixelCanvas.height = 1;
+      pixelContext = pixelCanvas.getContext('2d');
+      this.pixelContext_ = pixelContext;
+    }
+    pixelContext.clearRect(0, 0, 1, 1);
+    let data;
+    try {
+      pixelContext.drawImage(gl.canvas, x, y, 1, 1, 0, 0, 1, 1);
+      data = pixelContext.getImageData(0, 0, 1, 1).data;
+    } catch (err) {
+      return data;
+    }
+
+    if (data[3] === 0) {
+      return null;
+    }
+    return data;
   }
 }
 

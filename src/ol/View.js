@@ -10,6 +10,7 @@ import {DEFAULT_TILE_SIZE} from './tilegrid/common.js';
 import {
   METERS_PER_UNIT,
   createProjection,
+  disableCoordinateWarning,
   fromUserCoordinate,
   fromUserExtent,
   getUserProjection,
@@ -20,25 +21,25 @@ import {VOID} from './functions.js';
 import {
   add as addCoordinate,
   equals as coordinatesEqual,
+  equals,
   rotate as rotateCoordinate,
 } from './coordinate.js';
 import {assert} from './asserts.js';
 import {assign} from './obj.js';
 import {none as centerNone, createExtent} from './centerconstraint.js';
 import {clamp, modulo} from './math.js';
-import {createMinMaxResolution} from './resolutionconstraint.js';
+import {
+  createMinMaxResolution,
+  createSnapToPower,
+  createSnapToResolutions,
+} from './resolutionconstraint.js';
 import {
   createSnapToN,
   createSnapToZero,
   disable,
   none as rotationNone,
 } from './rotationconstraint.js';
-import {
-  createSnapToPower,
-  createSnapToResolutions,
-} from './resolutionconstraint.js';
-import {easeOut} from './easing.js';
-import {equals} from './coordinate.js';
+import {easeOut, inAndOut} from './easing.js';
 import {
   getCenter,
   getForViewAndSize,
@@ -46,7 +47,6 @@ import {
   getWidth,
   isEmpty,
 } from './extent.js';
-import {inAndOut} from './easing.js';
 import {linearFindNearest} from './array.js';
 import {fromExtent as polygonFromExtent} from './geom/Polygon.js';
 
@@ -242,7 +242,7 @@ const DEFAULT_MIN_ZOOM = 0;
  * A View has a `projection`. The projection determines the
  * coordinate system of the center, and its units determine the units of the
  * resolution (projection units per pixel). The default projection is
- * Spherical Mercator (EPSG:3857).
+ * Web Mercator (EPSG:3857).
  *
  * ### The view states
  *
@@ -406,6 +406,9 @@ class View extends BaseObject {
     }
     if (options.extent) {
       options.extent = fromUserExtent(options.extent, this.projection_);
+    }
+    if (options.projection) {
+      disableCoordinateWarning();
     }
 
     this.applyOptions_(options);
@@ -1633,7 +1636,9 @@ class View extends BaseObject {
    * @api
    */
   setCenter(center) {
-    this.setCenterInternal(fromUserCoordinate(center, this.getProjection()));
+    this.setCenterInternal(
+      center ? fromUserCoordinate(center, this.getProjection()) : center
+    );
   }
 
   /**

@@ -2,35 +2,42 @@
  * @module ol/renderer/canvas/TileLayer
  */
 import CanvasLayerRenderer from './Layer.js';
+import ImageTile from '../../ImageTile.js';
+import ReprojTile from '../../reproj/Tile.js';
 import TileRange from '../../TileRange.js';
 import TileState from '../../TileState.js';
-import {IMAGE_SMOOTHING_DISABLED} from './common.js';
+import {IMAGE_SMOOTHING_DISABLED, IMAGE_SMOOTHING_ENABLED} from './common.js';
 import {
   apply as applyTransform,
   compose as composeTransform,
   makeInverse,
+  toString as toTransformString,
 } from '../../transform.js';
 import {assign} from '../../obj.js';
 import {
+  containsCoordinate,
   createEmpty,
   equals,
   getIntersection,
   getTopLeft,
+  intersects,
 } from '../../extent.js';
 import {cssOpacity} from '../../css.js';
 import {fromUserExtent} from '../../proj.js';
 import {getUid} from '../../util.js';
 import {numberSafeCompareFunction} from '../../array.js';
-import {toString as toTransformString} from '../../transform.js';
+import {toSize} from '../../size.js';
 
 /**
  * @classdesc
  * Canvas renderer for tile layers.
  * @api
+ * @template {import("../../layer/Tile.js").default<import("../../source/Tile.js").default>|import("../../layer/VectorTile.js").default} [LayerType=import("../../layer/Tile.js").default<import("../../source/Tile.js").default>|import("../../layer/VectorTile.js").default]
+ * @extends {CanvasLayerRenderer<LayerType>}
  */
 class CanvasTileLayerRenderer extends CanvasLayerRenderer {
   /**
-   * @param {import("../../layer/Tile.js").default|import("../../layer/VectorTile.js").default} tileLayer Tile layer.
+   * @param {LayerType} tileLayer Tile layer.
    */
   constructor(tileLayer) {
     super(tileLayer);
@@ -132,6 +139,79 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
       tile = tile.getInterimTile();
     }
     return tile;
+  }
+
+  /**
+   * @param {import("../../pixel.js").Pixel} pixel Pixel.
+   * @return {Uint8ClampedArray} Data at the pixel location.
+   */
+  getData(pixel) {
+    const frameState = this.frameState;
+    if (!frameState) {
+      return null;
+    }
+
+    const layer = this.getLayer();
+    const coordinate = applyTransform(
+      frameState.pixelToCoordinateTransform,
+      pixel.slice()
+    );
+
+    const layerExtent = layer.getExtent();
+    if (layerExtent) {
+      if (!containsCoordinate(layerExtent, coordinate)) {
+        return null;
+      }
+    }
+
+    const pixelRatio = frameState.pixelRatio;
+    const projection = frameState.viewState.projection;
+    const viewState = frameState.viewState;
+    const source = layer.getRenderSource();
+    const tileGrid = source.getTileGridForProjection(viewState.projection);
+    const tilePixelRatio = source.getTilePixelRatio(frameState.pixelRatio);
+
+    for (
+      let z = tileGrid.getZForResolution(viewState.resolution);
+      z >= tileGrid.getMinZoom();
+      --z
+    ) {
+      const tileCoord = tileGrid.getTileCoordForCoordAndZ(coordinate, z);
+      const tile = source.getTile(
+        z,
+        tileCoord[1],
+        tileCoord[2],
+        pixelRatio,
+        projection
+      );
+      if (!(tile instanceof ImageTile || tile instanceof ReprojTile)) {
+        return null;
+      }
+
+      if (tile.getState() !== TileState.LOADED) {
+        continue;
+      }
+
+      const tileOrigin = tileGrid.getOrigin(z);
+      const tileSize = toSize(tileGrid.getTileSize(z));
+      const tileResolution = tileGrid.getResolution(z);
+
+      const col = Math.floor(
+        tilePixelRatio *
+          ((coordinate[0] - tileOrigin[0]) / tileResolution -
+            tileCoord[1] * tileSize[0])
+      );
+
+      const row = Math.floor(
+        tilePixelRatio *
+          ((tileOrigin[1] - coordinate[1]) / tileResolution -
+            tileCoord[2] * tileSize[1])
+      );
+
+      return this.getImageData(tile.getImage(), col, row);
+    }
+
+    return null;
   }
 
   /**
@@ -384,26 +464,37 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
 
         const inTransition =
           transition && tile.getAlpha(getUid(this), frameState.time) !== 1;
+        let contextSaved = false;
         if (!inTransition) {
           if (clips) {
             // Clip mask for regions in this tile that already filled by a higher z tile
-            context.save();
             currentClip = [x, y, x + w, y, x + w, y + h, x, y + h];
             for (let i = 0, ii = clips.length; i < ii; ++i) {
               if (z !== currentZ && currentZ < clipZs[i]) {
                 const clip = clips[i];
-                context.beginPath();
-                // counter-clockwise (outer ring) for current tile
-                context.moveTo(currentClip[0], currentClip[1]);
-                context.lineTo(currentClip[2], currentClip[3]);
-                context.lineTo(currentClip[4], currentClip[5]);
-                context.lineTo(currentClip[6], currentClip[7]);
-                // clockwise (inner ring) for higher z tile
-                context.moveTo(clip[6], clip[7]);
-                context.lineTo(clip[4], clip[5]);
-                context.lineTo(clip[2], clip[3]);
-                context.lineTo(clip[0], clip[1]);
-                context.clip();
+                if (
+                  intersects(
+                    [x, y, x + w, y + h],
+                    [clip[0], clip[3], clip[4], clip[7]]
+                  )
+                ) {
+                  if (!contextSaved) {
+                    context.save();
+                    contextSaved = true;
+                  }
+                  context.beginPath();
+                  // counter-clockwise (outer ring) for current tile
+                  context.moveTo(currentClip[0], currentClip[1]);
+                  context.lineTo(currentClip[2], currentClip[3]);
+                  context.lineTo(currentClip[4], currentClip[5]);
+                  context.lineTo(currentClip[6], currentClip[7]);
+                  // clockwise (inner ring) for higher z tile
+                  context.moveTo(clip[6], clip[7]);
+                  context.lineTo(clip[4], clip[5]);
+                  context.lineTo(clip[2], clip[3]);
+                  context.lineTo(clip[0], clip[1]);
+                  context.clip();
+                }
               }
             }
             clips.push(currentClip);
@@ -423,7 +514,9 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
           transition
         );
         if (clips && !inTransition) {
-          context.restore();
+          if (contextSaved) {
+            context.restore();
+          }
           this.renderedTiles.unshift(tile);
         } else {
           this.renderedTiles.push(tile);
@@ -457,6 +550,7 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
     if (layerState.extent) {
       context.restore();
     }
+    assign(context, IMAGE_SMOOTHING_ENABLED);
 
     if (canvasTransform !== canvas.style.transform) {
       canvas.style.transform = canvasTransform;
@@ -591,7 +685,7 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
    * @param {import("../../proj/Projection.js").default} projection Projection.
    * @param {import("../../extent.js").Extent} extent Extent.
    * @param {number} currentZ Current Z.
-   * @param {number} preload Load low resolution tiles up to 'preload' levels.
+   * @param {number} preload Load low resolution tiles up to `preload` levels.
    * @param {function(import("../../Tile.js").default):void} [opt_tileCallback] Tile callback.
    * @protected
    */
@@ -646,11 +740,5 @@ class CanvasTileLayerRenderer extends CanvasLayerRenderer {
     tileSource.updateCacheSize(tileCount, projection);
   }
 }
-
-/**
- * @function
- * @return {import("../../layer/Tile.js").default|import("../../layer/VectorTile.js").default}
- */
-CanvasTileLayerRenderer.prototype.getLayer;
 
 export default CanvasTileLayerRenderer;

@@ -148,9 +148,9 @@ const TRANSACTION_SERIALIZERS = {
  * @property {import("../extent.js").Extent} [bbox] Extent to use for the BBOX filter. The `geometryName`
  * option must be set.
  * @property {import("./filter/Filter.js").default} [filter] Filter condition. See
- * {@link module:ol/format/Filter} for more information.
+ * {@link module:ol/format/filter} for more information.
  * @property {string} [resultType] Indicates what response should be returned,
- * E.g. `hits` only includes the `numberOfFeatures` attribute in the response and no features.
+ * e.g. `hits` only includes the `numberOfFeatures` attribute in the response and no features.
  */
 
 /**
@@ -1054,7 +1054,7 @@ function writeQuery(node, featureType, objectStack) {
 }
 
 /**
- * @param {Node} node Node.
+ * @param {Element} node Node.
  * @param {import("./filter/Filter.js").default} filter Filter.
  * @param {Array<*>} objectStack Node stack.
  */
@@ -1158,7 +1158,7 @@ function writeDuringFilter(node, filter, objectStack) {
 }
 
 /**
- * @param {Node} node Node.
+ * @param {Element} node Node.
  * @param {import("./filter/LogicalNary.js").default} filter Filter.
  * @param {Array<*>} objectStack Node stack.
  */
@@ -1182,7 +1182,7 @@ function writeLogicalFilter(node, filter, objectStack) {
 }
 
 /**
- * @param {Node} node Node.
+ * @param {Element} node Node.
  * @param {import("./filter/Not.js").default} filter Filter.
  * @param {Array<*>} objectStack Node stack.
  */
@@ -1341,7 +1341,7 @@ export function writeFilter(filter, opt_version) {
 }
 
 /**
- * @param {Node} node Node.
+ * @param {Element} node Node.
  * @param {Array<string>} featureTypes Feature types.
  * @param {Array<*>} objectStack Node stack.
  */

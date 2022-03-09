@@ -107,6 +107,29 @@ class FullScreen extends Control {
 
     /**
      * @private
+     * @type {boolean}
+     */
+    this.keys_ = options.keys !== undefined ? options.keys : false;
+
+    /**
+     * @private
+     * @type {HTMLElement|string|undefined}
+     */
+    this.source_ = options.source;
+
+    /**
+     * @type {boolean}
+     * @private
+     */
+    this.isInFullscreen_ = false;
+
+    /**
+     * @private
+     */
+    this.boundHandleMapTargetChange_ = this.handleMapTargetChange_.bind(this);
+
+    /**
+     * @private
      * @type {string}
      */
     this.cssClassName_ =
@@ -157,48 +180,25 @@ class FullScreen extends Control {
         ? document.createTextNode(labelActive)
         : labelActive;
 
+    const tipLabel = options.tipLabel ? options.tipLabel : 'Toggle full-screen';
+
     /**
      * @private
      * @type {HTMLElement}
      */
     this.button_ = document.createElement('button');
-
-    const tipLabel = options.tipLabel ? options.tipLabel : 'Toggle full-screen';
-    this.button_.setAttribute('type', 'button');
     this.button_.title = tipLabel;
+    this.button_.setAttribute('type', 'button');
     this.button_.appendChild(this.labelNode_);
-
     this.button_.addEventListener(
       EventType.CLICK,
       this.handleClick_.bind(this),
       false
     );
+    this.setClassName_(this.button_, this.isInFullscreen_);
 
     this.element.className = `${this.cssClassName_} ${CLASS_UNSELECTABLE} ${CLASS_CONTROL}`;
     this.element.appendChild(this.button_);
-
-    /**
-     * @private
-     * @type {boolean}
-     */
-    this.keys_ = options.keys !== undefined ? options.keys : false;
-
-    /**
-     * @private
-     * @type {HTMLElement|string|undefined}
-     */
-    this.source_ = options.source;
-
-    /**
-     * @type {boolean}
-     * @private
-     */
-    this.isInFullscreen_ = false;
-
-    /**
-     * @private
-     */
-    this.boundHandleMapTargetChange_ = this.handleMapTargetChange_.bind(this);
   }
 
   /**
@@ -271,19 +271,21 @@ class FullScreen extends Control {
    * @private
    */
   setClassName_(element, fullscreen) {
-    const activeClassName = this.activeClassName_;
-    const inactiveClassName = this.inactiveClassName_;
-    const nextClassName = fullscreen ? activeClassName : inactiveClassName;
-    element.classList.remove(...activeClassName);
-    element.classList.remove(...inactiveClassName);
-    element.classList.add(...nextClassName);
+    if (fullscreen) {
+      element.classList.remove(...this.inactiveClassName_);
+      element.classList.add(...this.activeClassName_);
+    } else {
+      element.classList.remove(...this.activeClassName_);
+      element.classList.add(...this.inactiveClassName_);
+    }
   }
 
   /**
    * Remove the control from its current map and attach it to the new map.
+   * Pass `null` to just remove the control from the current map.
    * Subclasses may set up event handlers to get notified about changes to
    * the map here.
-   * @param {import("../PluggableMap.js").default} map Map.
+   * @param {import("../PluggableMap.js").default|null} map Map.
    * @api
    */
   setMap(map) {

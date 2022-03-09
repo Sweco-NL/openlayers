@@ -8,7 +8,7 @@ import RenderBox from '../render/Box.js';
 import {mouseActionButton} from '../events/condition.js';
 
 /**
- * A function that takes a {@link module:ol/MapBrowserEvent} and two
+ * A function that takes a {@link module:ol/MapBrowserEvent~MapBrowserEvent} and two
  * {@link module:ol/pixel~Pixel}s and returns a `{boolean}`. If the condition is met,
  * true should be returned.
  * @typedef {function(this: ?, import("../MapBrowserEvent.js").default, import("../pixel.js").Pixel, import("../pixel.js").Pixel):boolean} EndCondition
@@ -110,7 +110,7 @@ export class DragBoxEvent extends Event {
  * it to when the shift or other key is held down. This is used, for example,
  * for zooming to a specific area of the map
  * (see {@link module:ol/interaction/DragZoom~DragZoom} and
- * {@link module:ol/interaction/DragRotateAndZoom}).
+ * {@link module:ol/interaction/DragRotateAndZoom~DragRotateAndZoom}).
  *
  * @fires DragBoxEvent
  * @api

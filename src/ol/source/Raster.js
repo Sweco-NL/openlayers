@@ -466,7 +466,7 @@ const RasterOperationType = {
 
 /**
  * @classdesc
- * Events emitted by {@link module:ol/source/Raster} instances are instances of this
+ * Events emitted by {@link module:ol/source/Raster~RasterSource} instances are instances of this
  * type.
  */
 export class RasterSourceEvent extends Event {
@@ -917,15 +917,19 @@ function getImageData(layer, frameState) {
   }
   const container = renderer.renderFrame(frameState, null);
   let element;
-  if (container) {
-    element = container.firstElementChild;
-  }
-  if (!(element instanceof HTMLCanvasElement)) {
-    throw new Error('Unsupported rendered element: ' + element);
-  }
-  if (element.width === width && element.height === height) {
-    const context = element.getContext('2d');
-    return context.getImageData(0, 0, width, height);
+  if (container instanceof HTMLCanvasElement) {
+    element = container;
+  } else {
+    if (container) {
+      element = container.firstElementChild;
+    }
+    if (!(element instanceof HTMLCanvasElement)) {
+      throw new Error('Unsupported rendered element: ' + element);
+    }
+    if (element.width === width && element.height === height) {
+      const context = element.getContext('2d');
+      return context.getImageData(0, 0, width, height);
+    }
   }
 
   if (!sharedContext) {
