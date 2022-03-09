@@ -8,7 +8,7 @@ import {createCanvasContext2D} from '../dom.js';
 import {getFontParameters} from '../css.js';
 
 /**
- * @typedef {'Circle' | 'Image' | 'LineString' | 'Polygon' | 'Text' | 'Default'} BuilderType
+ * @typedef {'Circle' | 'Image' | 'LineString' | 'Polygon' | 'Text' | 'CircularString' | 'CompoundCurve' | 'CurvePolygon' | 'Default'} BuilderType
  */
 
 /**

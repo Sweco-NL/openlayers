@@ -17,7 +17,7 @@ import {transform2D} from '../../geom/flat/transform.js';
  * @const
  * @type {Array<import("../canvas.js").BuilderType>}
  */
-const ORDER = ['Polygon', 'Circle', 'LineString', 'Image', 'Text', 'Default'];
+const ORDER = ['Polygon', 'CircularString', 'CompoundCurve', 'CurvePolygon',  'Circle', 'LineString', 'Image', 'Text', 'Default'];
 
 class ExecutorGroup {
   /**
