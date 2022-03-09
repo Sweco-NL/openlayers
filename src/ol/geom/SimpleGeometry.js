@@ -151,6 +151,7 @@ class SimpleGeometry extends Geometry {
   }
 
   /**
+   * Reverses the geometry by reverting all coordinates.
    */
   reverse() {
     const coordinates = this.getCoordinates();
