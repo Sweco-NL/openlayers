@@ -1,6 +1,9 @@
 /**
  * @module ol/format/WKB
  */
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
 import Feature from '../Feature.js';
 import FeatureFormat, {transformGeometryWithOptions} from './Feature.js';
 import FormatType from './FormatType.js';
@@ -33,14 +36,13 @@ const WKBGeometryType = {
   MULTI_LINE_STRING: 5,
   MULTI_POLYGON: 6,
   GEOMETRY_COLLECTION: 7,
-
-  /*
   CIRCULAR_STRING: 8,
   COMPOUND_CURVE: 9,
   CURVE_POLYGON: 10,
-
   MULTI_CURVE: 11,
   MULTI_SURFACE: 12,
+
+  /*
   CURVE: 13,
   SURFACE: 14,
   */
@@ -114,6 +116,41 @@ class WkbReader {
     }
 
     return coords;
+  }
+
+  /**
+   * @return {Array<import('../coordinate.js').Coordinate>} coords for CircularString
+   */
+  readCircularString() {
+    return this.readLineString();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readCompoundCurve() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readCurvePolygon() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readMultiCurve() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readMultiSurface() {
+    return this.readGeometryCollection();
   }
 
   /**
@@ -226,6 +263,21 @@ class WkbReader {
 
       case WKBGeometryType.GEOMETRY_COLLECTION:
         return this.readGeometryCollection();
+
+      case WKBGeometryType.CIRCULAR_STRING:
+        return this.readCircularString();
+
+      case WKBGeometryType.COMPOUND_CURVE:
+        return this.readCompoundCurve();
+
+      case WKBGeometryType.CURVE_POLYGON:
+        return this.readCurvePolygon();
+
+      case WKBGeometryType.MULTI_CURVE:
+        return this.readMultiCurve();
+
+      case WKBGeometryType.MULTI_SURFACE:
+        return this.readMultiSurface();
 
       default:
         throw new Error(
@@ -346,6 +398,30 @@ class WkbReader {
         );
 
       case WKBGeometryType.GEOMETRY_COLLECTION:
+        return new GeometryCollection(
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result)
+        );
+
+      case WKBGeometryType.CIRCULAR_STRING:
+        return new CircularString(
+          /** @type {Array<import('../coordinate.js').Coordinate>} */ (result),
+          this.layout_
+        );
+
+      case WKBGeometryType.COMPOUND_CURVE:
+        return new CompoundCurve(
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
+          this.layout_
+        );
+
+      case WKBGeometryType.CURVE_POLYGON:
+        return new CurvePolygon(
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
+          this.layout_
+        );
+
+      case WKBGeometryType.MULTI_CURVE:
+      case WKBGeometryType.MULTI_SURFACE:
         return new GeometryCollection(
           /** @type {Array<import('../geom/Geometry.js').default>} */ (result)
         );

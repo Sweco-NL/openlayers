@@ -20,8 +20,11 @@ import {transform2D} from '../../geom/flat/transform.js';
  */
 const ORDER = [
   BuilderType.POLYGON,
+  BuilderType.CURVE_POLYGON,
   BuilderType.CIRCLE,
   BuilderType.LINE_STRING,
+  BuilderType.CIRCULAR_STRING,
+  BuilderType.COMPOUND_CURVE,
   BuilderType.IMAGE,
   BuilderType.TEXT,
   BuilderType.DEFAULT,

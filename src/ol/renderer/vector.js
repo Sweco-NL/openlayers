@@ -37,6 +37,9 @@ const GEOMETRY_RENDERERS = {
   'MultiPolygon': renderMultiPolygonGeometry,
   'GeometryCollection': renderGeometryCollectionGeometry,
   'Circle': renderCircleGeometry,
+  'CircularString': renderCircularStringGeometry,
+  'CompoundCurve': renderCompoundCurveGeometry,
+  'CurvePolygon': renderCurvePolygonGeometry,
 };
 
 /**
@@ -272,6 +275,84 @@ function renderLineStringGeometry(
     );
     textReplay.setTextStyle(textStyle);
     textReplay.drawText(geometry, feature);
+  }
+}
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CircularString.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").FeatureLike} feature Feature.
+ * @param {import("../render/canvas/BuilderGroup.js").default} [opt_declutterBuilderGroup] Builder for decluttering.
+ */
+function renderCircularStringGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  opt_declutterBuilderGroup
+) {
+  const strokeStyle = style.getStroke();
+  if (strokeStyle) {
+    const circularStringReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      BuilderType.CIRCULAR_STRING
+    );
+
+    circularStringReplay.setFillStrokeStyle(null, strokeStyle);
+    circularStringReplay.drawCircularString(geometry, feature);
+  }
+}
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CompoundCurve.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").default} feature Feature.
+ * @param {import("../render/canvas/BuilderGroup.js").default} [opt_declutterBuilderGroup] Builder for decluttering.
+ */
+function renderCompoundCurveGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  opt_declutterBuilderGroup
+) {
+  const strokeStyle = style.getStroke();
+  if (strokeStyle) {
+    const compoundCurveReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      BuilderType.COMPOUND_CURVE
+    );
+
+    compoundCurveReplay.setFillStrokeStyle(null, strokeStyle);
+    compoundCurveReplay.drawCompoundCurve(geometry, feature);
+  }
+}
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").default} feature Feature.
+ * @param {import("../render/canvas/BuilderGroup.js").default} [opt_declutterBuilderGroup] Builder for decluttering.
+ */
+function renderCurvePolygonGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  opt_declutterBuilderGroup
+) {
+  const fillStyle = style.getFill();
+  const strokeStyle = style.getStroke();
+  if (fillStyle || strokeStyle) {
+    const polygonReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      BuilderType.CURVE_POLYGON
+    );
+    polygonReplay.setFillStrokeStyle(fillStyle, strokeStyle);
+    polygonReplay.drawCurvePolygon(geometry, feature);
   }
 }
 
