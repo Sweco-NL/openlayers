@@ -65,7 +65,7 @@ features[1].setStyle(
     }),
     stroke: new Stroke({
       color: '#FF0000',
-      width: 1,
+      width: 4,
     }),
   })
 );
