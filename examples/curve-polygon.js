@@ -1,6 +1,7 @@
 import Map from '../src/ol/Map.js';
 import View from '../src/ol/View.js';
 import WKB from '../src/ol/format/WKB.js';
+import {Fill, Stroke, Style} from '../src/ol/style.js';
 import {OSM, Vector as VectorSource} from '../src/ol/source.js';
 import {Tile as TileLayer, Vector as VectorLayer} from '../src/ol/layer.js';
 
@@ -44,6 +45,30 @@ const features = wkb.map((wkb) => {
     featureProjection: 'EPSG:3857',
   });
 });
+
+features[0].setStyle(
+  new Style({
+    fill: new Fill({
+      color: '#FF0000',
+    }),
+    stroke: new Stroke({
+      color: '#0000FF',
+      width: 1,
+    }),
+  })
+);
+
+features[1].setStyle(
+  new Style({
+    fill: new Fill({
+      color: '#0000FF',
+    }),
+    stroke: new Stroke({
+      color: '#FF0000',
+      width: 1,
+    }),
+  })
+);
 
 const vector = new VectorLayer({
   source: new VectorSource({
