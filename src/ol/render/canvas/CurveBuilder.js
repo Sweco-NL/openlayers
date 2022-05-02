@@ -76,6 +76,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
     }
     this.setFillStrokeStyles();
     this.beginGeometry(curvePolygonGeometry, feature);
+    this.instructions.push(beginPathInstruction);
     this.appendCurvePolygonInstructions(curvePolygonGeometry);
     this.endGeometry(feature);
   }
@@ -270,7 +271,6 @@ class CanvasCurveBuilder extends CanvasBuilder {
     }
     state.lastStroke = 0;
     super.applyStroke(state);
-    this.instructions.push(beginPathInstruction);
   }
 }
 
