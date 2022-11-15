@@ -1,12 +1,32 @@
-import assert from 'assert';
-import frontMatter from 'front-matter';
-import fs from 'fs';
-import fse from 'fs-extra';
-import handlebars from 'handlebars';
-import path, {dirname} from 'path';
-import sources from 'webpack-sources';
-import {fileURLToPath} from 'url';
-import {marked} from 'marked';
+import assert from "assert";
+import frontMatter from "front-matter";
+import fs from "fs";
+import fse from "fs-extra";
+import handlebars from "handlebars";
+import path, { dirname } from "path";
+import sources from "webpack-sources";
+import { fileURLToPath } from "url";
+import { marked } from "marked";
+
+/**
+ * String.prototype.replaceAll() polyfill
+ * https://gomakethings.com/how-to-replace-a-section-of-a-string-with-another-one-with-vanilla-js/
+ * @author Chris Ferdinandi
+ * @license MIT
+ */
+if (!String.prototype.replaceAll) {
+  String.prototype.replaceAll = function (str, newStr) {
+    // If a regex pattern
+    if (
+      Object.prototype.toString.call(str).toLowerCase() === "[object regexp]"
+    ) {
+      return this.replace(str, newStr);
+    }
+
+    // If a string
+    return this.replace(new RegExp(str, "g"), newStr);
+  };
+}
 
 const RawSource = sources.RawSource;
 const baseDir = dirname(fileURLToPath(import.meta.url));
@@ -19,36 +39,36 @@ const isTemplateCss =
   /\/(?:bootstrap|fontawesome-free@[\d.]+\/css\/(?:fontawesome|brands|solid))(?:\.min)?\.css(?:\?.*)?$/;
 
 const exampleDirContents = fs
-  .readdirSync(path.join(baseDir, '..'))
+  .readdirSync(path.join(baseDir, ".."))
   .filter((name) => /^(?!index).*\.html$/.test(name))
-  .map((name) => name.replace(/\.html$/, ''));
+  .map((name) => name.replace(/\.html$/, ""));
 
 function getPackageInfo() {
-  return fse.readJSON(path.resolve(baseDir, '../../package.json'));
+  return fse.readJSON(path.resolve(baseDir, "../../package.json"));
 }
 
 handlebars.registerHelper(
-  'md',
+  "md",
   (str) => new handlebars.SafeString(marked(str))
 );
 
 /**
  * Used to doube-escape the title when stored as data-* attribute.
  */
-handlebars.registerHelper('escape', (text) => {
+handlebars.registerHelper("escape", (text) => {
   return handlebars.Utils.escapeExpression(text);
 });
 
-handlebars.registerHelper('indent', (text, options) => {
+handlebars.registerHelper("indent", (text, options) => {
   if (!text) {
     return text;
   }
   const count = options.hash.spaces || 2;
-  const spaces = new Array(count + 1).join(' ');
+  const spaces = new Array(count + 1).join(" ");
   return text
-    .split('\n')
-    .map((line) => (line ? spaces + line : ''))
-    .join('\n');
+    .split("\n")
+    .map((line) => (line ? spaces + line : ""))
+    .join("\n");
 });
 
 /**
@@ -60,7 +80,7 @@ handlebars.registerHelper('indent', (text, options) => {
 function sortObjectByKey(obj) {
   return Object.keys(obj)
     .sort() // sort twice to get predictable, case insensitve order
-    .sort((a, b) => a.localeCompare(b, 'en', {sensitivity: 'base'}))
+    .sort((a, b) => a.localeCompare(b, "en", { sensitivity: "base" }))
     .reduce((idx, tag) => {
       idx[tag] = obj[tag];
       return idx;
@@ -97,12 +117,12 @@ function createTagIndex(exampleData) {
  */
 function createWordIndex(exampleData) {
   const index = {};
-  const keys = ['shortdesc', 'title', 'tags'];
+  const keys = ["shortdesc", "title", "tags"];
   exampleData.forEach((data, i) => {
     keys.forEach((key) => {
-      let text = data[key] || '';
+      let text = data[key] || "";
       if (Array.isArray(text)) {
-        text = text.join(' ');
+        text = text.join(" ");
       }
       const words = text.toLowerCase().split(/\W+/);
       words.forEach((word) => {
@@ -134,9 +154,9 @@ function getDependencies(jsSource, pkg) {
   let importMatch;
   while ((importMatch = importRegEx.exec(jsSource))) {
     const imp = importMatch[1];
-    if (!imp.startsWith('ol/') && imp != 'ol') {
-      const parts = imp.split('/');
-      const dep = imp.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+    if (!imp.startsWith("ol/") && imp != "ol") {
+      const parts = imp.split("/");
+      const dep = imp.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
       if (dep in pkg.devDependencies) {
         dependencies[dep] = pkg.devDependencies[dep];
       } else if (dep in pkg.dependencies) {
@@ -155,7 +175,7 @@ export default class ExampleBuilder {
    * common chunk.
    */
   constructor(config) {
-    this.name = 'ExampleBuilder';
+    this.name = "ExampleBuilder";
     this.templates = config.templates;
     this.common = config.common;
   }
@@ -180,7 +200,7 @@ export default class ExampleBuilder {
         continue;
       }
 
-      const name = filename.replace(/\.js$/, '');
+      const name = filename.replace(/\.js$/, "");
       if (!exampleDirContents.includes(name)) {
         continue;
       }
@@ -204,7 +224,7 @@ export default class ExampleBuilder {
     }));
 
     examples.sort((a, b) =>
-      a.title.localeCompare(b.title, 'en', {sensitivity: 'base'})
+      a.title.localeCompare(b.title, "en", { sensitivity: "base" })
     );
     const tagIndex = createTagIndex(examples);
     const info = {
@@ -241,14 +261,14 @@ export default class ExampleBuilder {
     );
 
     const indexSource = `const info = ${JSON.stringify(info)};`;
-    assets['examples-info.js'] = new RawSource(indexSource);
+    assets["examples-info.js"] = new RawSource(indexSource);
   }
 
   async parseExample(dir, name) {
     const htmlName = `${name}.html`;
     const htmlPath = path.join(dir, htmlName);
-    const htmlSource = await fse.readFile(htmlPath, {encoding: 'utf8'});
-    const {attributes: data, body} = frontMatter(
+    const htmlSource = await fse.readFile(htmlPath, { encoding: "utf8" });
+    const { attributes: data, body } = frontMatter(
       this.ensureNewLineAtEnd(htmlSource)
     );
     assert(!!data.layout, `missing layout in ${htmlPath}`);
@@ -258,7 +278,7 @@ export default class ExampleBuilder {
       dir: dir,
       name: name,
       // process tags
-      tags: data.tags ? data.tags.replace(/[\s"]+/g, '').split(',') : [],
+      tags: data.tags ? data.tags.replace(/[\s"]+/g, "").split(",") : [],
     });
   }
 
@@ -267,8 +287,8 @@ export default class ExampleBuilder {
    * @return {string} Same string without a newline character at end
    */
   ensureNewLineAtEnd(source) {
-    if (source[source.length - 1] !== '\n') {
-      source += '\n';
+    if (source[source.length - 1] !== "\n") {
+      source += "\n";
     }
     return source;
   }
@@ -283,8 +303,8 @@ export default class ExampleBuilder {
         // remove "../src/" prefix to have the same import syntax as the documentation
         .replace(/'\.\.\/src\//g, "'")
         // Remove worker loader import and modify `new Worker()` to add source
-        .replace(/import Worker from 'worker-loader![^\n]*\n/g, '')
-        .replace('new Worker()', "new Worker('./worker.js', {type: 'module'})")
+        .replace(/import Worker from 'worker-loader![^\n]*\n/g, "")
+        .replace("new Worker()", "new Worker('./worker.js', {type: 'module'})")
     );
   }
 
@@ -304,12 +324,12 @@ export default class ExampleBuilder {
 
   async render(data, pkg) {
     const assets = {};
-    const readOptions = {encoding: 'utf8'};
+    const readOptions = { encoding: "utf8" };
 
     // add in script tag
     const jsName = `${data.name}.js`;
     const jsPath = path.join(data.dir, jsName);
-    let jsSource = await fse.readFile(jsPath, {encoding: 'utf8'});
+    let jsSource = await fse.readFile(jsPath, { encoding: "utf8" });
     jsSource = this.transformJsSource(this.cloakSource(jsSource, data.cloak));
     data.js = {
       local: [],
@@ -325,12 +345,12 @@ export default class ExampleBuilder {
           const extraSourcePath = path.join(data.dir, fileName);
           let source = await fse.readFile(extraSourcePath, readOptions);
           let ext = fileName.match(/\.(\w+)$/)[1];
-          if (ext === 'mjs') {
-            ext = 'js';
+          if (ext === "mjs") {
+            ext = "js";
           }
-          if (ext === 'js') {
+          if (ext === "js") {
             source = this.transformJsSource(source);
-            jsSources += '\n' + source;
+            jsSources += "\n" + source;
           }
           source = this.cloakSource(source, data.cloak);
           assets[fileName] = source;
@@ -349,11 +369,11 @@ export default class ExampleBuilder {
         name: data.name,
         dependencies: getDependencies(jsSources, pkg),
         devDependencies: {
-          vite: '^3.2.3',
+          vite: "^3.2.3",
         },
         scripts: {
-          start: 'vite',
-          build: 'vite build',
+          start: "vite",
+          build: "vite build",
         },
       },
       null,

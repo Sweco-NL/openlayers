@@ -1,15 +1,14 @@
 /**
  * @module ol/geom/CurvePolygon
  */
-import GeometryType from './GeometryType.js';
-import SimpleGeometry from './SimpleGeometry.js';
-import {createOrUpdateEmpty, extend} from '../extent.js';
-import {linearRingIsClockwise} from './flat/orient.js';
+import SimpleGeometry from "./SimpleGeometry.js";
+import { createOrUpdateEmpty, extend } from "../extent.js";
+import { linearRingIsClockwise } from "./flat/orient.js";
 
 class CurvePolygon extends SimpleGeometry {
   /**
    * @param {Array<import('../geom/Geometry.js').default>} [rings] rings
-   * @param {import("./GeometryLayout.js").default} [opt_layout] Layout.
+   * @param {import("../geom/Geometry.js").GeometryLayout} [opt_layout] Layout.
    */
   constructor(rings, opt_layout) {
     super();
@@ -100,11 +99,11 @@ class CurvePolygon extends SimpleGeometry {
 
   /**
    * Returns the type of this geometry.
-   * @return {import("./GeometryType.js").default} Geometry type.
+   * @return {import("./Geometry.js").Type} Geometry type.
    * @api
    */
   getType() {
-    return GeometryType.CURVE_POLYGON;
+    return "CurvePolygon";
   }
 
   /**
