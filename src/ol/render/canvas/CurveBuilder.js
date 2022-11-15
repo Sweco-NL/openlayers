@@ -1,14 +1,15 @@
 /**
  * @module ol/render/canvas/CircularStringBuilder
  */
-import CanvasBuilder from './Builder.js';
+import CanvasBuilder from "./Builder.js";
 import CanvasInstruction, {
   beginPathInstruction,
   closePathInstruction,
   fillInstruction,
   strokeInstruction,
-} from './Instruction.js';
-import GeometryType from '../../geom/GeometryType.js';
+} from "./Instruction.js";
+import GeometryType from "../../geom/GeometryType.js";
+import { defaultFillStyle } from "../canvas.js";
 
 class CanvasCurveBuilder extends CanvasBuilder {
   /**
@@ -77,6 +78,10 @@ class CanvasCurveBuilder extends CanvasBuilder {
     this.setFillStrokeStyles();
     this.beginGeometry(curvePolygonGeometry, feature);
     this.instructions.push(beginPathInstruction);
+    this.hitDetectionInstructions.push([
+      CanvasInstruction.SET_FILL_STYLE,
+      defaultFillStyle,
+    ]);
     this.appendCurvePolygonInstructions(curvePolygonGeometry);
     this.endGeometry(feature);
   }
@@ -115,13 +120,16 @@ class CanvasCurveBuilder extends CanvasBuilder {
       }
       if (stroke) {
         this.instructions.push(closePathInstruction);
+        this.hitDetectionInstructions.push(closePathInstruction);
       }
     });
     if (fill) {
       this.instructions.push(fillInstruction);
+      this.hitDetectionInstructions.push(fillInstruction);
     }
     if (stroke) {
       this.instructions.push(strokeInstruction);
+      this.hitDetectionInstructions.push(strokeInstruction);
     }
   }
 
@@ -180,11 +188,13 @@ class CanvasCurveBuilder extends CanvasBuilder {
     startIndex = this.coordinates.length
   ) {
     const endIndex = this.appendCoordinates(flatCoordinates, 2);
-    this.instructions.push([
+    const moveToArcToInstruction = [
       CanvasInstruction.MOVE_TO_ARC_TO,
       startIndex,
       endIndex,
-    ]);
+    ];
+    this.instructions.push(moveToArcToInstruction);
+    this.hitDetectionInstructions.push(moveToArcToInstruction);
   }
 
   /**
@@ -202,11 +212,13 @@ class CanvasCurveBuilder extends CanvasBuilder {
     startIndex = this.coordinates.length
   ) {
     const endIndex = this.appendCoordinates(flatCoordinates, stride);
-    this.instructions.push([
+    const moveToLineToInstruction = [
       CanvasInstruction.MOVE_TO_LINE_TO,
       startIndex,
       endIndex,
-    ]);
+    ];
+    this.instructions.push(moveToLineToInstruction);
+    this.hitDetectionInstructions.push(moveToLineToInstruction);
   }
 
   /**
@@ -252,6 +264,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
       state.lastStroke !== this.coordinates.length
     ) {
       this.instructions.push(strokeInstruction);
+      this.hitDetectionInstructions.push(strokeInstruction);
     }
     this.reverseHitDetectionInstructions();
     this.state = null;
@@ -267,6 +280,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
       state.lastStroke !== this.coordinates.length
     ) {
       this.instructions.push(strokeInstruction);
+      this.hitDetectionInstructions.push(strokeInstruction);
       state.lastStroke = this.coordinates.length;
     }
     state.lastStroke = 0;
