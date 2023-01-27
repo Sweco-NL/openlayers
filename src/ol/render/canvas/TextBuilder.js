@@ -257,6 +257,12 @@ class CanvasTextBuilder extends CanvasBuilder {
               geometry
             ).getCenter();
           break;
+        case 'CircularString':
+            flatCoordinates =
+              /** @type {import("../../geom/CircularString.js").default} */ (
+              geometry
+            ).getFlatMidpoint();
+            break;
         case 'MultiLineString':
           flatCoordinates =
             /** @type {import("../../geom/MultiLineString.js").default} */ (
