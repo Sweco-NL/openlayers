@@ -331,6 +331,15 @@ function renderCompoundCurveGeometry(
     compoundCurveReplay.setFillStrokeStyle(null, strokeStyle);
     compoundCurveReplay.drawCompoundCurve(geometry, feature);
   }
+  const textStyle = style.getText();
+  if (textStyle && textStyle.getText()) {
+    const textReplay = (opt_declutterBuilderGroup || builderGroup).getBuilder(
+      style.getZIndex(),
+      'Text'
+    );
+    textReplay.setTextStyle(textStyle);
+    textReplay.drawText(geometry, feature);
+  }
 }
 
 /**

@@ -263,6 +263,12 @@ class CanvasTextBuilder extends CanvasBuilder {
               geometry
             ).getFlatMidpoint();
             break;
+        case 'CompoundCurve':
+            flatCoordinates =
+              /** @type {import("../../geom/CompoundCurve.js").default} */ (
+                geometry
+              ).getFlatMidpoint();
+              break;
         case 'MultiLineString':
           flatCoordinates =
             /** @type {import("../../geom/MultiLineString.js").default} */ (
