@@ -1,17 +1,36 @@
 /**
  * @module ol/geom/CurvePolygon
  */
-import SimpleGeometry from './SimpleGeometry.js';
-import {createOrUpdateEmpty, extend} from '../extent.js';
-import {linearRingIsClockwise} from './flat/orient.js';
+import SimpleGeometry from "./SimpleGeometry.js";
+import { createOrUpdateEmpty, extend } from "../extent.js";
+import { linearRingIsClockwise } from "./flat/orient.js";
+import { getCenter } from "../extent.js";
+import { getInteriorPointOfArray } from "./flat/interiorpoint.js";
+import { linearRingsAreOriented, orientLinearRings } from "./flat/orient.js";
+import Point from "./Point.js";
+import { quantizeArray } from "./flat/simplify.js";
+import { deflateCoordinatesArray } from "./flat/deflate.js";
 
 class CurvePolygon extends SimpleGeometry {
   /**
    * @param {Array<import('../geom/Geometry.js').default>} [rings] rings
    * @param {import("../geom/Geometry.js").GeometryLayout} [opt_layout] Layout.
+   * @param {Array<number>} [ends] Ends (for internal use with flat coordinates).
    */
-  constructor(rings, opt_layout) {
+  constructor(rings, opt_layout, ends) {
     super();
+
+    /**
+     * @type {Array<number>}
+     * @private
+     */
+    this.ends_ = [];
+
+    /**
+     * @private
+     * @type {number}
+     */
+    this.flatInteriorPointRevision_ = -1;
 
     /**
      * @private
@@ -43,6 +62,54 @@ class CurvePolygon extends SimpleGeometry {
   }
 
   /**
+   * @return {Array<number>} Ends.
+   */
+  getEnds() {
+    return this.ends_;
+  }
+
+  /**
+   * @return {Array<number>} Interior point.
+   */
+  getFlatInteriorPoint() {
+    if (this.flatInteriorPointRevision_ != this.getRevision()) {
+      const flatCenter = getCenter(this.getExtent());
+      this.flatInteriorPoint_ = getInteriorPointOfArray(
+        this.getOrientedFlatCoordinates(),
+        0,
+        this.ends_,
+        this.stride,
+        flatCenter,
+        0
+      );
+      this.flatInteriorPointRevision_ = this.getRevision();
+    }
+    return this.flatInteriorPoint_;
+  }
+
+  /**
+   * @return {Array<number>} Oriented flat coordinates.
+   */
+  getOrientedFlatCoordinates() {
+    if (this.orientedRevision_ != this.getRevision()) {
+      const flatCoordinates = this.flatCoordinates;
+      if (linearRingsAreOriented(flatCoordinates, 0, this.ends_, this.stride)) {
+        this.orientedFlatCoordinates_ = flatCoordinates;
+      } else {
+        this.orientedFlatCoordinates_ = flatCoordinates.slice();
+        this.orientedFlatCoordinates_.length = orientLinearRings(
+          this.orientedFlatCoordinates_,
+          0,
+          this.ends_,
+          this.stride
+        );
+      }
+      this.orientedRevision_ = this.getRevision();
+    }
+    return this.orientedFlatCoordinates_;
+  }
+
+  /**
    * Changes the orientation of the rings such that inner rings are oriented
    * counterclockwise and the outer ring is oriented clockwise.
    * @private
@@ -60,6 +127,16 @@ class CurvePolygon extends SimpleGeometry {
         ring.reverse();
       }
     });
+  }
+
+  /**
+   * Return an interior point of the polygon.
+   * @return {Point} Interior point as XYM coordinate, where M is the
+   * length of the horizontal intersection that the point belongs to.
+   * @api
+   */
+  getInteriorPoint() {
+    return new Point(this.getFlatInteriorPoint(), "XYM");
   }
 
   /**
@@ -103,7 +180,7 @@ class CurvePolygon extends SimpleGeometry {
    * @api
    */
   getType() {
-    return 'CurvePolygon';
+    return "CurvePolygon";
   }
 
   /**

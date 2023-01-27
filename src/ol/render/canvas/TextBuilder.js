@@ -179,7 +179,7 @@ class CanvasTextBuilder extends CanvasBuilder {
       textState.placement === 'line' &&
       (geometryType == 'LineString' ||
         geometryType == 'MultiLineString' ||
-        geometryType == 'Polygon' ||
+        geometryType == 'Polygon' || 
         geometryType == 'MultiPolygon')
     ) {
       if (!intersects(this.getBufferedMaxExtent(), geometry.getExtent())) {
@@ -274,6 +274,16 @@ class CanvasTextBuilder extends CanvasBuilder {
           }
           stride = 3;
           break;
+        case 'CurvePolygon':
+          flatCoordinates =
+            /** @type {import("../../geom/Polygon.js").default} */ (
+              geometry
+            ).getFlatInteriorPoint();
+          if (!textState.overflow) {
+            geometryWidths.push(flatCoordinates[2] / this.resolution);
+          }
+          stride = 3;
+            break;
         case 'MultiPolygon':
           const interiorPoints =
             /** @type {import("../../geom/MultiPolygon.js").default} */ (
