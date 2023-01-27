@@ -180,6 +180,7 @@ class CanvasTextBuilder extends CanvasBuilder {
       (geometryType == 'LineString' ||
         geometryType == 'MultiLineString' ||
         geometryType == 'Polygon' || 
+        geometryType == 'CurvePolygon' ||
         geometryType == 'MultiPolygon')
     ) {
       if (!intersects(this.getBufferedMaxExtent(), geometry.getExtent())) {
@@ -197,7 +198,11 @@ class CanvasTextBuilder extends CanvasBuilder {
         ends = /** @type {import("../../geom/Polygon.js").default} */ (geometry)
           .getEnds()
           .slice(0, 1);
-      } else if (geometryType == 'MultiPolygon') {
+      } else if (geometryType == 'CurvePolygon') {
+        ends = /** @type {import("../../geom/CurvePolygon.js").default} */ (geometry)
+          .getEnds()
+          .slice(0, 1);
+        } else if (geometryType == 'MultiPolygon') {
         const endss =
           /** @type {import("../../geom/MultiPolygon.js").default} */ (
             geometry

@@ -62,7 +62,7 @@ features[0].setStyle(
     text: new Text({
       font: "12px Calibri,sans-serif",
       overflow: true,
-      placement: "point",
+      placement: "line",
       fill: new Fill({
         color: "#000",
       }),
@@ -87,7 +87,7 @@ features[1].setStyle(
     text: new Text({
       font: "12px Calibri,sans-serif",
       overflow: true,
-      placement: "point",
+      placement: "line",
       fill: new Fill({
         color: "#000",
       }),

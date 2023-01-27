@@ -49,6 +49,20 @@ class CurvePolygon extends SimpleGeometry {
   update() {
     this.orientRings();
     this.updateFlatCoordinates();
+    const coordinatess = [
+      this.rings_
+        .map((ring) => ring.getCoordinates())
+        .reduce((previous, current) => {
+          return previous.concat(current);
+        }, []),
+    ];
+    this.ends_ = deflateCoordinatesArray(
+      this.flatCoordinates,
+      0,
+      coordinatess,
+      this.stride,
+      this.ends_
+    );
   }
 
   /**
