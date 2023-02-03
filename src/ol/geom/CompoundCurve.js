@@ -46,13 +46,14 @@ class CompoundCurve extends SimpleGeometry {
         geometries
       );
 
-    this.updateCoordinates();
+    this.updateCoordinates(opt_layout);
   }
 
   /**
-   * Updates the curve's coordinates based on the geometries' coordinates.
-   */
-  updateCoordinates() {
+     * Updates the curve's coordinates based on the geometries' coordinates.
+     * @param {import("../geom/Geometry.js").GeometryLayout} [opt_layout] Layout.
+     */
+  updateCoordinates(opt_layout) {
     this.setCoordinates_(
       this.geometries_.reduce((previous, current) => {
         if (previous.length < 1) {
@@ -61,7 +62,7 @@ class CompoundCurve extends SimpleGeometry {
 
         return previous.concat(current.getCoordinates().slice(1));
       }, [])
-    );
+    , opt_layout);
   }
 
   /**

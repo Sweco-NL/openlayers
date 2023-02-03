@@ -2,7 +2,7 @@ import Feature from '../../../../src/ol/Feature.js';
 import Point from '../../../../src/ol/geom/Point.js';
 import WKT from '../../../../src/ol/format/WKT.js';
 import expect from '../../expect.js';
-import {transform} from '../../../../src/ol/proj.js';
+import { transform } from '../../../../src/ol/proj.js';
 
 describe('ol/format/WKT.js', function () {
   let format = new WKT();
@@ -968,6 +968,155 @@ describe('ol/format/WKT.js', function () {
     ]);
   });
 
+  // circular string read / write tests
+
+  it('CircularString read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING(0 0,1 1,2 0)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with Z read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING Z(0 0 1,1 1 2,2 0 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with M read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING M(0 0 1,1 1 2,2 0 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with ZM read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING ZM(0 0 1 1,1 1 2 2,2 0 3 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1, 1],
+      [1, 1, 2, 2],
+      [2, 0, 3, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  // compound curve read / write tests
+  it('CompoundCurve read / written correctly', function () {
+    const wkt = 'COMPOUNDCURVE(CIRCULARSTRING(0 0,1 1,2 0),(2 0,3 1))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+      [3, 1],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with Z read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE Z(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+      [3, 1, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with M read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE M(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+      [3, 1, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with ZM read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE ZM(CIRCULARSTRING(0 0 1 1,1 1 2 2,2 0 3 3),(2 0 3 3,3 1 4 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1, 1],
+      [1, 1, 2, 2],
+      [2, 0, 3, 3],
+      [3, 1, 4, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  // curve polygon read / write tests
+  it('CurvePolygon read / written correctly', function () {
+    const wkt = 'CURVEPOLYGON(CIRCULARSTRING(0 0,1 1,2 0),(2 0,3 1))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([0, 0, 1, 1, 2, 0, 2, 0, 3, 1]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with Z read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON Z(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 2, 2, 0, 3, 2, 0, 3, 3, 1, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with M read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON M(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 2, 2, 0, 3, 2, 0, 3, 3, 1, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with ZM read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON ZM(CIRCULARSTRING(0 0 1 1,1 1 2 2,2 0 3 3),(2 0 3 3,3 1 4 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 1, 2, 2, 2, 0, 3, 3, 2, 0, 3, 3, 3, 1, 4, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
   it('Empty geometries read / written correctly', function () {
     const wkt = 'POINT EMPTY';
     const geom = format.readGeometry(wkt);
@@ -1054,7 +1203,7 @@ describe('ol/format/WKT.js', function () {
   });
 
   it('GeometryCollection split / merged correctly', function () {
-    format = new WKT({splitCollection: true});
+    format = new WKT({ splitCollection: true });
     const wkt = 'GEOMETRYCOLLECTION(POINT(4 6),LINESTRING(4 6,7 10))';
     const features = format.readFeatures(wkt);
     expect(features.length).to.eql(2);

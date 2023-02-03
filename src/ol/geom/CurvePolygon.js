@@ -1,15 +1,15 @@
 /**
  * @module ol/geom/CurvePolygon
  */
-import SimpleGeometry from "./SimpleGeometry.js";
-import { createOrUpdateEmpty, extend } from "../extent.js";
-import { linearRingIsClockwise } from "./flat/orient.js";
-import { getCenter } from "../extent.js";
-import { getInteriorPointOfArray } from "./flat/interiorpoint.js";
-import { linearRingsAreOriented, orientLinearRings } from "./flat/orient.js";
-import Point from "./Point.js";
-import { quantizeArray } from "./flat/simplify.js";
-import { deflateCoordinatesArray } from "./flat/deflate.js";
+import Point from './Point.js';
+import SimpleGeometry from './SimpleGeometry.js';
+import {createOrUpdateEmpty, extend, getCenter} from '../extent.js';
+import {getInteriorPointOfArray} from './flat/interiorpoint.js';
+import {
+  linearRingIsClockwise,
+  linearRingsAreOriented,
+  orientLinearRings,
+} from './flat/orient.js';
 
 class CurvePolygon extends SimpleGeometry {
   /**
@@ -39,14 +39,15 @@ class CurvePolygon extends SimpleGeometry {
     this.rings_ =
       /** @type {Array<import('../geom/SimpleGeometry.js').default>} */ (rings);
 
-    this.update();
+    this.update(opt_layout);
   }
 
   /**
    * Updates the polygon's internals.
-   * @private
+   * @param {import("../geom/Geometry.js").GeometryLayout} [opt_layout] Layout.
    */
-  update() {
+  update(opt_layout) {
+    this.layout = opt_layout;
     this.orientRings();
     this.updateFlatCoordinates();
   }
@@ -136,7 +137,7 @@ class CurvePolygon extends SimpleGeometry {
    * @api
    */
   getInteriorPoint() {
-    return new Point(this.getFlatInteriorPoint(), "XYM");
+    return new Point(this.getFlatInteriorPoint(), 'XYM');
   }
 
   /**
@@ -180,7 +181,7 @@ class CurvePolygon extends SimpleGeometry {
    * @api
    */
   getType() {
-    return "CurvePolygon";
+    return 'CurvePolygon';
   }
 
   /**
