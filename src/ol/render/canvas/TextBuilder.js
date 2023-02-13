@@ -179,7 +179,7 @@ class CanvasTextBuilder extends CanvasBuilder {
       textState.placement === 'line' &&
       (geometryType == 'LineString' ||
         geometryType == 'MultiLineString' ||
-        geometryType == 'Polygon' ||
+        geometryType == 'Polygon' || 
         geometryType == 'MultiPolygon')
     ) {
       if (!intersects(this.getBufferedMaxExtent(), geometry.getExtent())) {
@@ -257,6 +257,18 @@ class CanvasTextBuilder extends CanvasBuilder {
               geometry
             ).getCenter();
           break;
+        case 'CircularString':
+            flatCoordinates =
+              /** @type {import("../../geom/CircularString.js").default} */ (
+              geometry
+            ).getFlatMidpoint();
+            break;
+        case 'CompoundCurve':
+            flatCoordinates =
+              /** @type {import("../../geom/CompoundCurve.js").default} */ (
+                geometry
+              ).getFlatMidpoint();
+              break;
         case 'MultiLineString':
           flatCoordinates =
             /** @type {import("../../geom/MultiLineString.js").default} */ (
@@ -274,6 +286,16 @@ class CanvasTextBuilder extends CanvasBuilder {
           }
           stride = 3;
           break;
+        case 'CurvePolygon':
+          flatCoordinates =
+            /** @type {import("../../geom/Polygon.js").default} */ (
+              geometry
+            ).getFlatInteriorPoint();
+          if (!textState.overflow) {
+            geometryWidths.push(flatCoordinates[2] / this.resolution);
+          }
+          stride = 3;
+            break;
         case 'MultiPolygon':
           const interiorPoints =
             /** @type {import("../../geom/MultiPolygon.js").default} */ (

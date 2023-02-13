@@ -1,6 +1,9 @@
 /**
  * @module ol/format/WKT
  */
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
 import Feature from '../Feature.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
@@ -23,6 +26,10 @@ const GeometryConstructor = {
   'MULTIPOINT': MultiPoint,
   'MULTILINESTRING': MultiLineString,
   'MULTIPOLYGON': MultiPolygon,
+  'CURVEPOLYGON': CurvePolygon,
+  'CIRCULARSTRING': CircularString,
+  'COMPOUNDCURVE': CompoundCurve,
+  'MULTISURFACE': GeometryCollection,
 };
 
 /**
@@ -88,6 +95,9 @@ const wktTypeLookup = {
   MultiPolygon: 'MULTIPOLYGON',
   GeometryCollection: 'GEOMETRYCOLLECTION',
   Circle: 'CIRCLE',
+  CircularString: 'CIRCULARSTRING',
+  CompoundCurve: 'COMPOUNDCURVE',
+  CurvePolygon: 'CURVEPOLYGON',
 };
 
 /**
@@ -495,6 +505,86 @@ class Parser {
   }
 
   /**
+   * @return {Array<Array<number>>} The circular string.
+   * @private
+   */
+  parseCircularStringText_() {
+    if (this.match(TokenType.LEFT_PAREN)) {
+      const coordinates = this.parsePointList_();
+      if (this.match(TokenType.RIGHT_PAREN)) {
+        return coordinates;
+      }
+    }
+    throw new Error(this.formatErrorMessage_());
+  }
+
+  /**
+   * @return {Array<import("../geom/Geometry.js").default>} The compound curve.
+   * @private
+   */
+  parseCompoundCurveText_() {
+    if (this.match(TokenType.LEFT_PAREN)) {
+      const geometries = [];
+      do {
+        geometries.push(this.parseCurveSubGeometry_());
+      } while (this.match(TokenType.COMMA));
+      if (this.match(TokenType.RIGHT_PAREN)) {
+        return geometries;
+      }
+    }
+    throw new Error(this.formatErrorMessage_());
+  }
+
+  /**
+   * @return {import("../geom/Geometry.js").default} The sub geometry of a compound curve.
+   * @private
+   */
+  parseCurveSubGeometry_() {
+    if (this.token_.type == TokenType.LEFT_PAREN) {
+      const coordinates = this.parseLineStringText_();
+      const geometry = new LineString(coordinates, this.layout_);
+      return geometry;
+    }
+    if (this.token_.value == 'CIRCULARSTRING') {
+      this.consume_();
+      const coordinates = this.parseCircularStringText_();
+      const geometry = new CircularString(coordinates, this.layout_);
+      return geometry;
+    }
+    if (this.token_.value == 'LINESTRING') {
+      this.consume_();
+      const coordinates = this.parseCircularStringText_();
+      const geometry = new LineString(coordinates, this.layout_);
+      return geometry;
+    }
+    throw new Error(this.formatErrorMessage_());
+  }
+
+  /**
+   * @return {Array<import("../geom/Geometry.js").default>} The curve polygon.
+   * @private
+   */
+  parseCurvePolygonText_() {
+    if (this.match(TokenType.LEFT_PAREN)) {
+      const geometries = [];
+      do {
+        if (this.token_.value == 'COMPOUNDCURVE') {
+          this.consume_();
+          const subGeometries = this.parseCompoundCurveText_();
+          const geometry = new CompoundCurve(subGeometries, this.layout_);
+          geometries.push(geometry);
+        } else {
+          geometries.push(this.parseCurveSubGeometry_());
+        }
+      } while (this.match(TokenType.COMMA));
+      if (this.match(TokenType.RIGHT_PAREN)) {
+        return geometries;
+      }
+    }
+    throw new Error(this.formatErrorMessage_());
+  }
+
+  /**
    * @return {boolean} Whether the token implies an empty geometry.
    * @private
    */
@@ -546,38 +636,51 @@ class Parser {
           throw new Error('Invalid geometry type: ' + geomType);
         }
 
-        let coordinates;
+        let geometryInput;
+        // a more generic name for the above word would be coo
 
         if (isEmpty) {
           if (geomType == 'POINT') {
-            coordinates = [NaN, NaN];
+            geometryInput = [NaN, NaN];
           } else {
-            coordinates = [];
+            geometryInput = [];
           }
         } else {
           switch (geomType) {
             case 'POINT': {
-              coordinates = this.parsePointText_();
+              geometryInput = this.parsePointText_();
               break;
             }
             case 'LINESTRING': {
-              coordinates = this.parseLineStringText_();
+              geometryInput = this.parseLineStringText_();
               break;
             }
             case 'POLYGON': {
-              coordinates = this.parsePolygonText_();
+              geometryInput = this.parsePolygonText_();
               break;
             }
             case 'MULTIPOINT': {
-              coordinates = this.parseMultiPointText_();
+              geometryInput = this.parseMultiPointText_();
               break;
             }
             case 'MULTILINESTRING': {
-              coordinates = this.parseMultiLineStringText_();
+              geometryInput = this.parseMultiLineStringText_();
               break;
             }
             case 'MULTIPOLYGON': {
-              coordinates = this.parseMultiPolygonText_();
+              geometryInput = this.parseMultiPolygonText_();
+              break;
+            }
+            case 'CIRCULARSTRING': {
+              geometryInput = this.parseCircularStringText_();
+              break;
+            }
+            case 'COMPOUNDCURVE': {
+              geometryInput = this.parseCompoundCurveText_();
+              break;
+            }
+            case 'CURVEPOLYGON': {
+              geometryInput = this.parseCurvePolygonText_();
               break;
             }
             default:
@@ -585,7 +688,7 @@ class Parser {
           }
         }
 
-        return new ctor(coordinates, this.layout_);
+        return new ctor(geometryInput, this.layout_);
       }
     }
     throw new Error(this.formatErrorMessage_());
@@ -813,6 +916,96 @@ function encodeMultiPolygonGeometry(geom) {
 }
 
 /**
+ * @param {CircularString} geom CircularString geometry.
+ * @return {string} Coordinates part of CircularString as WKT.
+ */
+function encodeCircularStringGeometry(geom) {
+  const coordinates = geom.getCoordinates();
+  const array = [];
+  for (let i = 0, ii = coordinates.length; i < ii; ++i) {
+    array.push(coordinates[i].join(' '));
+  }
+  return array.join(',');
+}
+
+/**
+ * @param {CompoundCurve} geom CompoundCurve geometry.
+ * @return {string} Coordinates part of CompoundCurve as WKT.
+ */
+function encodeCompoundCurveGeometry(geom) {
+  const array = [];
+  const components = geom.getGeometries();
+  for (let i = 0, ii = components.length; i < ii; ++i) {
+    switch (components[i].getType()) {
+      case 'LineString':
+        array.push(
+          '(' +
+            encodeLineStringGeometry(
+              /** @type {LineString} */ (components[i])
+            ) +
+            ')'
+        );
+        break;
+      case 'CircularString':
+        array.push(
+          'CIRCULARSTRING(' +
+            encodeCircularStringGeometry(
+              /** @type {CircularString} */ (components[i])
+            ) +
+            ')'
+        );
+        break;
+      default:
+        throw new Error(
+          'Unsupported geometry type: ' + components[i].getType()
+        );
+    }
+  }
+  return array.join(',');
+}
+
+/**
+ * @param {CurvePolygon} geom CurvePolygon geometry.
+ * @return {string} Coordinates part of CurvePolygon as WKT.
+ */
+function encodeCurvePolygonGeometry(geom) {
+  const array = [];
+  const rings = geom.getRings();
+  for (let i = 0, ii = rings.length; i < ii; ++i) {
+    switch (rings[i].getType()) {
+      case 'LineString':
+        array.push(
+          '(' +
+            encodeLineStringGeometry(/** @type {LineString} */ (rings[i])) +
+            ')'
+        );
+        break;
+      case 'CircularString':
+        array.push(
+          'CIRCULARSTRING(' +
+            encodeCircularStringGeometry(
+              /** @type {CircularString} */ (rings[i])
+            ) +
+            ')'
+        );
+        break;
+      case 'CompoundCurve':
+        array.push(
+          'COMPOUNDCURVE(' +
+            encodeCompoundCurveGeometry(
+              /** @type {CompoundCurve} */ (rings[i])
+            ) +
+            ')'
+        );
+        break;
+      default:
+        throw new Error('Unsupported geometry type: ' + rings[i].getType());
+    }
+  }
+  return array.join(',');
+}
+
+/**
  * @param {import("../geom/SimpleGeometry.js").default} geom SimpleGeometry geometry.
  * @return {string} Potential dimensional information for WKT type.
  */
@@ -840,6 +1033,9 @@ const GeometryEncoder = {
   'MultiLineString': encodeMultiLineStringGeometry,
   'MultiPolygon': encodeMultiPolygonGeometry,
   'GeometryCollection': encodeGeometryCollectionGeometry,
+  'CircularString': encodeCircularStringGeometry,
+  'CompoundCurve': encodeCompoundCurveGeometry,
+  'CurvePolygon': encodeCurvePolygonGeometry,
 };
 
 /**

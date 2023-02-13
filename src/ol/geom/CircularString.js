@@ -1,14 +1,15 @@
 /**
  * @module ol/geom/CircularString
  */
-import SimpleGeometry from './SimpleGeometry.js';
-import {CircularArc, Vector2} from './flat/CircularArc.js';
-import {assignClosestPoint, maxSquaredDelta} from './flat/closest.js';
+import SimpleGeometry from "./SimpleGeometry.js";
+import { CircularArc, Vector2 } from "./flat/CircularArc.js";
+import { assignClosestPoint, maxSquaredDelta } from "./flat/closest.js";
 import {
   closestSquaredDistanceXY,
   createOrUpdateFromFlatCoordinates,
-} from '../extent.js';
-import {deflateCoordinates} from './flat/deflate.js';
+} from "../extent.js";
+import { deflateCoordinates } from "./flat/deflate.js";
+import { interpolatePoint } from "./flat/interpolate.js";
 
 /**
  * @classdesc
@@ -208,12 +209,45 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
+   * Return the coordinate at the provided fraction along the linestring.
+   * The `fraction` is a number between 0 and 1, where 0 is the start of the
+   * linestring and 1 is the end.
+   * @param {number} fraction Fraction.
+   * @param {import("../coordinate.js").Coordinate} [dest] Optional coordinate whose values will
+   *     be modified. If not provided, a new coordinate will be returned.
+   * @return {import("../coordinate.js").Coordinate} Coordinate of the interpolated point.
+   * @api
+   */
+  getCoordinateAt(fraction, dest) {
+    return interpolatePoint(
+      this.flatCoordinates,
+      0,
+      this.flatCoordinates.length,
+      this.stride,
+      fraction,
+      dest,
+      this.stride
+    );
+  }
+
+  /**
+   * @return {Array<number>} Flat midpoint.
+   */
+  getFlatMidpoint() {
+    if (this.flatMidpointRevision_ != this.getRevision()) {
+      this.flatMidpoint_ = this.getCoordinateAt(0.5, this.flatMidpoint_);
+      this.flatMidpointRevision_ = this.getRevision();
+    }
+    return this.flatMidpoint_;
+  }
+
+  /**
    * Get the type of this geometry.
    * @return {import("./Geometry.js").Type} Geometry type.
    * @api
    */
   getType() {
-    return 'CircularString';
+    return "CircularString";
   }
 
   /**
