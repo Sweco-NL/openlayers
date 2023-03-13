@@ -1,5 +1,5 @@
 {
-  "name": "ol",
+  "name": "@sweco-nl/ol",
   "version": "7.1.0",
   "description": "OpenLayers mapping library",
   "keywords": [
@@ -7,7 +7,7 @@
     "mapping",
     "openlayers"
   ],
-  "private": true,
+  "private": false,
   "homepage": "https://openlayers.org/",
   "scripts": {
     "lint": "eslint tasks test src/ol examples config",
@@ -30,10 +30,13 @@
     "apidoc-debug": "shx rm -rf build/apidoc && node --inspect-brk=9229 ./node_modules/jsdoc/jsdoc.js -R config/jsdoc/api/index.md -c config/jsdoc/api/conf.json -P package.json -d build/apidoc",
     "apidoc": "shx rm -rf build/apidoc && jsdoc -R config/jsdoc/api/index.md -c config/jsdoc/api/conf.json -P package.json -d build/apidoc"
   },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git://github.com/openlayers/openlayers.git"
+    "url": "git://github.com/Sweco-NL/openlayers.git"
   },
   "license": "BSD-2-Clause",
   "bugs": {
