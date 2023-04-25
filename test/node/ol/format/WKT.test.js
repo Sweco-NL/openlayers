@@ -1095,6 +1095,16 @@ describe('ol/format/WKT.js', function () {
     expect(format.writeGeometry(geom)).to.eql(wkt);
   });
 
+  it('CurvePolygon with Z with nested Z read / written correctly', function () {
+    const wkt = 'CURVEPOLYGON Z(CIRCULARSTRING Z(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 2, 2, 0, 3, 2, 0, 3, 3, 1, 4,
+    ]);
+  });
+
   it('CurvePolygon with M read / written correctly', function () {
     const wkt =
       'CURVEPOLYGON M(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';

@@ -509,12 +509,16 @@ class Parser {
    * @private
    */
   parseCircularStringText_() {
+    // Consume all text in nested CircularString before the first paren like Z, M and ZM
+    while (this.match(TokenType.TEXT)) {}
+
     if (this.match(TokenType.LEFT_PAREN)) {
       const coordinates = this.parsePointList_();
       if (this.match(TokenType.RIGHT_PAREN)) {
         return coordinates;
       }
     }
+
     throw new Error(this.formatErrorMessage_());
   }
 
@@ -523,6 +527,9 @@ class Parser {
    * @private
    */
   parseCompoundCurveText_() {
+    // Consume all text in nested CompointCurve before the first paren like Z, M and ZM
+    while (this.match(TokenType.TEXT)) {}
+
     if (this.match(TokenType.LEFT_PAREN)) {
       const geometries = [];
       do {
