@@ -53,6 +53,19 @@ class CurvePolygon extends SimpleGeometry {
   }
 
   /**
+   * Return the coordinates of the curve polygon.
+   * @return {Array<import("../coordinate.js").Coordinate>} Coordinates.
+   * @api
+   */
+  getCoordinates() {
+    const rings = [];
+    for (const ring of this.rings_) {
+      rings.push(ring.getCoordinates());
+    }
+    return rings;
+  }
+
+  /**
    * Updates the polygon's array of flat coordinates.
    * @private
    */
