@@ -1,35 +1,35 @@
 /**
  * @module ol/format/WKT
  */
-import CircularString from '../geom/CircularString.js';
-import CompoundCurve from '../geom/CompoundCurve.js';
-import CurvePolygon from '../geom/CurvePolygon.js';
-import Feature from '../Feature.js';
-import GeometryCollection from '../geom/GeometryCollection.js';
-import LineString from '../geom/LineString.js';
-import MultiLineString from '../geom/MultiLineString.js';
-import MultiPoint from '../geom/MultiPoint.js';
-import MultiPolygon from '../geom/MultiPolygon.js';
-import Point from '../geom/Point.js';
-import Polygon from '../geom/Polygon.js';
-import TextFeature from './TextFeature.js';
-import {transformGeometryWithOptions} from './Feature.js';
+import CircularString from "../geom/CircularString.js";
+import CompoundCurve from "../geom/CompoundCurve.js";
+import CurvePolygon from "../geom/CurvePolygon.js";
+import Feature from "../Feature.js";
+import GeometryCollection from "../geom/GeometryCollection.js";
+import LineString from "../geom/LineString.js";
+import MultiLineString from "../geom/MultiLineString.js";
+import MultiPoint from "../geom/MultiPoint.js";
+import MultiPolygon from "../geom/MultiPolygon.js";
+import Point from "../geom/Point.js";
+import Polygon from "../geom/Polygon.js";
+import TextFeature from "./TextFeature.js";
+import { transformGeometryWithOptions } from "./Feature.js";
 
 /**
  * Geometry constructors
  * @enum {function (new:import("../geom/Geometry.js").default, Array, import("../geom/Geometry.js").GeometryLayout)}
  */
 const GeometryConstructor = {
-  'POINT': Point,
-  'LINESTRING': LineString,
-  'POLYGON': Polygon,
-  'MULTIPOINT': MultiPoint,
-  'MULTILINESTRING': MultiLineString,
-  'MULTIPOLYGON': MultiPolygon,
-  'CURVEPOLYGON': CurvePolygon,
-  'CIRCULARSTRING': CircularString,
-  'COMPOUNDCURVE': CompoundCurve,
-  'MULTISURFACE': GeometryCollection,
+  POINT: Point,
+  LINESTRING: LineString,
+  POLYGON: Polygon,
+  MULTIPOINT: MultiPoint,
+  MULTILINESTRING: MultiLineString,
+  MULTIPOLYGON: MultiPolygon,
+  CURVEPOLYGON: CurvePolygon,
+  CIRCULARSTRING: CircularString,
+  COMPOUNDCURVE: CompoundCurve,
+  MULTISURFACE: GeometryCollection,
 };
 
 /**
@@ -49,25 +49,25 @@ const GeometryConstructor = {
  * @const
  * @type {string}
  */
-const EMPTY = 'EMPTY';
+const EMPTY = "EMPTY";
 
 /**
  * @const
  * @type {string}
  */
-const Z = 'Z';
+const Z = "Z";
 
 /**
  * @const
  * @type {string}
  */
-const M = 'M';
+const M = "M";
 
 /**
  * @const
  * @type {string}
  */
-const ZM = 'ZM';
+const ZM = "ZM";
 
 /**
  * @const
@@ -87,17 +87,17 @@ const TokenType = {
  * @type {Object<import("../geom/Geometry.js").Type, string>}
  */
 const wktTypeLookup = {
-  Point: 'POINT',
-  LineString: 'LINESTRING',
-  Polygon: 'POLYGON',
-  MultiPoint: 'MULTIPOINT',
-  MultiLineString: 'MULTILINESTRING',
-  MultiPolygon: 'MULTIPOLYGON',
-  GeometryCollection: 'GEOMETRYCOLLECTION',
-  Circle: 'CIRCLE',
-  CircularString: 'CIRCULARSTRING',
-  CompoundCurve: 'COMPOUNDCURVE',
-  CurvePolygon: 'CURVEPOLYGON',
+  Point: "POINT",
+  LineString: "LINESTRING",
+  Polygon: "POLYGON",
+  MultiPoint: "MULTIPOINT",
+  MultiLineString: "MULTILINESTRING",
+  MultiPolygon: "MULTIPOLYGON",
+  GeometryCollection: "GEOMETRYCOLLECTION",
+  Circle: "CIRCLE",
+  CircularString: "CIRCULARSTRING",
+  CompoundCurve: "COMPOUNDCURVE",
+  CurvePolygon: "CURVEPOLYGON",
 };
 
 /**
@@ -126,7 +126,7 @@ class Lexer {
    * @private
    */
   isAlpha_(c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
   }
 
   /**
@@ -138,7 +138,7 @@ class Lexer {
    */
   isNumeric_(c, decimal) {
     decimal = decimal !== undefined ? decimal : false;
-    return (c >= '0' && c <= '9') || (c == '.' && !decimal);
+    return (c >= "0" && c <= "9") || (c == "." && !decimal);
   }
 
   /**
@@ -147,7 +147,7 @@ class Lexer {
    * @private
    */
   isWhiteSpace_(c) {
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    return c == " " || c == "\t" || c == "\r" || c == "\n";
   }
 
   /**
@@ -169,13 +169,13 @@ class Lexer {
     let value = c;
     let type;
 
-    if (c == '(') {
+    if (c == "(") {
       type = TokenType.LEFT_PAREN;
-    } else if (c == ',') {
+    } else if (c == ",") {
       type = TokenType.COMMA;
-    } else if (c == ')') {
+    } else if (c == ")") {
       type = TokenType.RIGHT_PAREN;
-    } else if (this.isNumeric_(c) || c == '-') {
+    } else if (this.isNumeric_(c) || c == "-") {
       type = TokenType.NUMBER;
       value = this.readNumber_();
     } else if (this.isAlpha_(c)) {
@@ -183,13 +183,13 @@ class Lexer {
       value = this.readText_();
     } else if (this.isWhiteSpace_(c)) {
       return this.nextToken();
-    } else if (c === '') {
+    } else if (c === "") {
       type = TokenType.EOF;
     } else {
-      throw new Error('Unexpected character: ' + c);
+      throw new Error("Unexpected character: " + c);
     }
 
-    return {position: position, value: value, type: type};
+    return { position: position, value: value, type: type };
   }
 
   /**
@@ -202,9 +202,9 @@ class Lexer {
     let decimal = false;
     let scientificNotation = false;
     do {
-      if (c == '.') {
+      if (c == ".") {
         decimal = true;
-      } else if (c == 'e' || c == 'E') {
+      } else if (c == "e" || c == "E") {
         scientificNotation = true;
       }
       c = this.nextChar_();
@@ -212,10 +212,10 @@ class Lexer {
       this.isNumeric_(c, decimal) ||
       // if we haven't detected a scientific number before, 'e' or 'E'
       // hint that we should continue to read
-      (!scientificNotation && (c == 'e' || c == 'E')) ||
+      (!scientificNotation && (c == "e" || c == "E")) ||
       // once we know that we have a scientific number, both '-' and '+'
       // are allowed
-      (scientificNotation && (c == '-' || c == '+'))
+      (scientificNotation && (c == "-" || c == "+"))
     );
     return parseFloat(this.wkt.substring(index, this.index_--));
   }
@@ -261,7 +261,7 @@ class Parser {
      * @type {import("../geom/Geometry.js").GeometryLayout}
      * @private
      */
-    this.layout_ = 'XY';
+    this.layout_ = "XY";
   }
 
   /**
@@ -310,18 +310,18 @@ class Parser {
    */
   parseGeometryLayout_() {
     /** @type {import("../geom/Geometry.js").GeometryLayout} */
-    let layout = 'XY';
+    let layout = "XY";
     const dimToken = this.token_;
     if (this.isTokenType(TokenType.TEXT)) {
       const dimInfo = dimToken.value;
       if (dimInfo === Z) {
-        layout = 'XYZ';
+        layout = "XYZ";
       } else if (dimInfo === M) {
-        layout = 'XYM';
+        layout = "XYM";
       } else if (dimInfo === ZM) {
-        layout = 'XYZM';
+        layout = "XYZM";
       }
-      if (layout !== 'XY') {
+      if (layout !== "XY") {
         this.consume_();
       }
     }
@@ -509,6 +509,7 @@ class Parser {
    * @private
    */
   parseCircularStringText_() {
+    while (this.match(TokenType.TEXT)) {}
     if (this.match(TokenType.LEFT_PAREN)) {
       const coordinates = this.parsePointList_();
       if (this.match(TokenType.RIGHT_PAREN)) {
@@ -523,6 +524,7 @@ class Parser {
    * @private
    */
   parseCompoundCurveText_() {
+    while (this.match(TokenType.TEXT)) {}
     if (this.match(TokenType.LEFT_PAREN)) {
       const geometries = [];
       do {
@@ -545,13 +547,13 @@ class Parser {
       const geometry = new LineString(coordinates, this.layout_);
       return geometry;
     }
-    if (this.token_.value == 'CIRCULARSTRING') {
+    if (this.token_.value == "CIRCULARSTRING") {
       this.consume_();
       const coordinates = this.parseCircularStringText_();
       const geometry = new CircularString(coordinates, this.layout_);
       return geometry;
     }
-    if (this.token_.value == 'LINESTRING') {
+    if (this.token_.value == "LINESTRING") {
       this.consume_();
       const coordinates = this.parseCircularStringText_();
       const geometry = new LineString(coordinates, this.layout_);
@@ -568,7 +570,7 @@ class Parser {
     if (this.match(TokenType.LEFT_PAREN)) {
       const geometries = [];
       do {
-        if (this.token_.value == 'COMPOUNDCURVE') {
+        if (this.token_.value == "COMPOUNDCURVE") {
           this.consume_();
           const subGeometries = this.parseCompoundCurveText_();
           const geometry = new CompoundCurve(subGeometries, this.layout_);
@@ -604,13 +606,13 @@ class Parser {
    */
   formatErrorMessage_() {
     return (
-      'Unexpected `' +
+      "Unexpected `" +
       this.token_.value +
-      '` at position ' +
+      "` at position " +
       this.token_.position +
-      ' in `' +
+      " in `" +
       this.lexer_.wkt +
-      '`'
+      "`"
     );
   }
 
@@ -624,7 +626,7 @@ class Parser {
       const geomType = /** @type {string} */ (token.value);
       this.layout_ = this.parseGeometryLayout_();
       const isEmpty = this.isEmptyGeometry_();
-      if (geomType == 'GEOMETRYCOLLECTION') {
+      if (geomType == "GEOMETRYCOLLECTION") {
         if (isEmpty) {
           return new GeometryCollection([]);
         }
@@ -633,53 +635,53 @@ class Parser {
       } else {
         const ctor = GeometryConstructor[geomType];
         if (!ctor) {
-          throw new Error('Invalid geometry type: ' + geomType);
+          throw new Error("Invalid geometry type: " + geomType);
         }
 
         let geometryInput;
         // a more generic name for the above word would be coo
 
         if (isEmpty) {
-          if (geomType == 'POINT') {
+          if (geomType == "POINT") {
             geometryInput = [NaN, NaN];
           } else {
             geometryInput = [];
           }
         } else {
           switch (geomType) {
-            case 'POINT': {
+            case "POINT": {
               geometryInput = this.parsePointText_();
               break;
             }
-            case 'LINESTRING': {
+            case "LINESTRING": {
               geometryInput = this.parseLineStringText_();
               break;
             }
-            case 'POLYGON': {
+            case "POLYGON": {
               geometryInput = this.parsePolygonText_();
               break;
             }
-            case 'MULTIPOINT': {
+            case "MULTIPOINT": {
               geometryInput = this.parseMultiPointText_();
               break;
             }
-            case 'MULTILINESTRING': {
+            case "MULTILINESTRING": {
               geometryInput = this.parseMultiLineStringText_();
               break;
             }
-            case 'MULTIPOLYGON': {
+            case "MULTIPOLYGON": {
               geometryInput = this.parseMultiPolygonText_();
               break;
             }
-            case 'CIRCULARSTRING': {
+            case "CIRCULARSTRING": {
               geometryInput = this.parseCircularStringText_();
               break;
             }
-            case 'COMPOUNDCURVE': {
+            case "COMPOUNDCURVE": {
               geometryInput = this.parseCompoundCurveText_();
               break;
             }
-            case 'CURVEPOLYGON': {
+            case "CURVEPOLYGON": {
               geometryInput = this.parseCurvePolygonText_();
               break;
             }
@@ -755,7 +757,7 @@ class WKT extends TextFeature {
   readFeaturesFromText(text, options) {
     let geometries = [];
     const geometry = this.readGeometryFromText(text, options);
-    if (this.splitCollection_ && geometry.getType() == 'GeometryCollection') {
+    if (this.splitCollection_ && geometry.getType() == "GeometryCollection") {
       geometries = /** @type {GeometryCollection} */ (
         geometry
       ).getGeometriesArray();
@@ -793,7 +795,7 @@ class WKT extends TextFeature {
     if (geometry) {
       return this.writeGeometryText(geometry, options);
     }
-    return '';
+    return "";
   }
 
   /**
@@ -832,9 +834,9 @@ class WKT extends TextFeature {
 function encodePointGeometry(geom) {
   const coordinates = geom.getCoordinates();
   if (coordinates.length === 0) {
-    return '';
+    return "";
   }
-  return coordinates.join(' ');
+  return coordinates.join(" ");
 }
 
 /**
@@ -845,9 +847,9 @@ function encodeMultiPointGeometry(geom) {
   const array = [];
   const components = geom.getPoints();
   for (let i = 0, ii = components.length; i < ii; ++i) {
-    array.push('(' + encodePointGeometry(components[i]) + ')');
+    array.push("(" + encodePointGeometry(components[i]) + ")");
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -860,7 +862,7 @@ function encodeGeometryCollectionGeometry(geom) {
   for (let i = 0, ii = geoms.length; i < ii; ++i) {
     array.push(encode(geoms[i]));
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -871,9 +873,9 @@ function encodeLineStringGeometry(geom) {
   const coordinates = geom.getCoordinates();
   const array = [];
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
-    array.push(coordinates[i].join(' '));
+    array.push(coordinates[i].join(" "));
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -884,9 +886,9 @@ function encodeMultiLineStringGeometry(geom) {
   const array = [];
   const components = geom.getLineStrings();
   for (let i = 0, ii = components.length; i < ii; ++i) {
-    array.push('(' + encodeLineStringGeometry(components[i]) + ')');
+    array.push("(" + encodeLineStringGeometry(components[i]) + ")");
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -897,9 +899,9 @@ function encodePolygonGeometry(geom) {
   const array = [];
   const rings = geom.getLinearRings();
   for (let i = 0, ii = rings.length; i < ii; ++i) {
-    array.push('(' + encodeLineStringGeometry(rings[i]) + ')');
+    array.push("(" + encodeLineStringGeometry(rings[i]) + ")");
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -910,9 +912,9 @@ function encodeMultiPolygonGeometry(geom) {
   const array = [];
   const components = geom.getPolygons();
   for (let i = 0, ii = components.length; i < ii; ++i) {
-    array.push('(' + encodePolygonGeometry(components[i]) + ')');
+    array.push("(" + encodePolygonGeometry(components[i]) + ")");
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -923,9 +925,9 @@ function encodeCircularStringGeometry(geom) {
   const coordinates = geom.getCoordinates();
   const array = [];
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
-    array.push(coordinates[i].join(' '));
+    array.push(coordinates[i].join(" "));
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -937,31 +939,31 @@ function encodeCompoundCurveGeometry(geom) {
   const components = geom.getGeometries();
   for (let i = 0, ii = components.length; i < ii; ++i) {
     switch (components[i].getType()) {
-      case 'LineString':
+      case "LineString":
         array.push(
-          '(' +
+          "(" +
             encodeLineStringGeometry(
               /** @type {LineString} */ (components[i])
             ) +
-            ')'
+            ")"
         );
         break;
-      case 'CircularString':
+      case "CircularString":
         array.push(
-          'CIRCULARSTRING(' +
+          "CIRCULARSTRING(" +
             encodeCircularStringGeometry(
               /** @type {CircularString} */ (components[i])
             ) +
-            ')'
+            ")"
         );
         break;
       default:
         throw new Error(
-          'Unsupported geometry type: ' + components[i].getType()
+          "Unsupported geometry type: " + components[i].getType()
         );
     }
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -973,36 +975,36 @@ function encodeCurvePolygonGeometry(geom) {
   const rings = geom.getRings();
   for (let i = 0, ii = rings.length; i < ii; ++i) {
     switch (rings[i].getType()) {
-      case 'LineString':
+      case "LineString":
         array.push(
-          '(' +
+          "(" +
             encodeLineStringGeometry(/** @type {LineString} */ (rings[i])) +
-            ')'
+            ")"
         );
         break;
-      case 'CircularString':
+      case "CircularString":
         array.push(
-          'CIRCULARSTRING(' +
+          "CIRCULARSTRING(" +
             encodeCircularStringGeometry(
               /** @type {CircularString} */ (rings[i])
             ) +
-            ')'
+            ")"
         );
         break;
-      case 'CompoundCurve':
+      case "CompoundCurve":
         array.push(
-          'COMPOUNDCURVE(' +
+          "COMPOUNDCURVE(" +
             encodeCompoundCurveGeometry(
               /** @type {CompoundCurve} */ (rings[i])
             ) +
-            ')'
+            ")"
         );
         break;
       default:
-        throw new Error('Unsupported geometry type: ' + rings[i].getType());
+        throw new Error("Unsupported geometry type: " + rings[i].getType());
     }
   }
-  return array.join(',');
+  return array.join(",");
 }
 
 /**
@@ -1011,11 +1013,11 @@ function encodeCurvePolygonGeometry(geom) {
  */
 function encodeGeometryLayout(geom) {
   const layout = geom.getLayout();
-  let dimInfo = '';
-  if (layout === 'XYZ' || layout === 'XYZM') {
+  let dimInfo = "";
+  if (layout === "XYZ" || layout === "XYZM") {
     dimInfo += Z;
   }
-  if (layout === 'XYM' || layout === 'XYZM') {
+  if (layout === "XYM" || layout === "XYZM") {
     dimInfo += M;
   }
   return dimInfo;
@@ -1026,16 +1028,16 @@ function encodeGeometryLayout(geom) {
  * @type {Object<string, function(import("../geom/Geometry.js").default): string>}
  */
 const GeometryEncoder = {
-  'Point': encodePointGeometry,
-  'LineString': encodeLineStringGeometry,
-  'Polygon': encodePolygonGeometry,
-  'MultiPoint': encodeMultiPointGeometry,
-  'MultiLineString': encodeMultiLineStringGeometry,
-  'MultiPolygon': encodeMultiPolygonGeometry,
-  'GeometryCollection': encodeGeometryCollectionGeometry,
-  'CircularString': encodeCircularStringGeometry,
-  'CompoundCurve': encodeCompoundCurveGeometry,
-  'CurvePolygon': encodeCurvePolygonGeometry,
+  Point: encodePointGeometry,
+  LineString: encodeLineStringGeometry,
+  Polygon: encodePolygonGeometry,
+  MultiPoint: encodeMultiPointGeometry,
+  MultiLineString: encodeMultiLineStringGeometry,
+  MultiPolygon: encodeMultiPolygonGeometry,
+  GeometryCollection: encodeGeometryCollectionGeometry,
+  CircularString: encodeCircularStringGeometry,
+  CompoundCurve: encodeCompoundCurveGeometry,
+  CurvePolygon: encodeCurvePolygonGeometry,
 };
 
 /**
@@ -1048,18 +1050,18 @@ function encode(geom) {
   const geometryEncoder = GeometryEncoder[type];
   const enc = geometryEncoder(geom);
   let wktType = wktTypeLookup[type];
-  if (typeof (/** @type {?} */ (geom).getFlatCoordinates) === 'function') {
+  if (typeof (/** @type {?} */ (geom).getFlatCoordinates) === "function") {
     const dimInfo = encodeGeometryLayout(
       /** @type {import("../geom/SimpleGeometry.js").default} */ (geom)
     );
     if (dimInfo.length > 0) {
-      wktType += ' ' + dimInfo;
+      wktType += " " + dimInfo;
     }
   }
   if (enc.length === 0) {
-    return wktType + ' ' + EMPTY;
+    return wktType + " " + EMPTY;
   }
-  return wktType + '(' + enc + ')';
+  return wktType + "(" + enc + ")";
 }
 
 export default WKT;
