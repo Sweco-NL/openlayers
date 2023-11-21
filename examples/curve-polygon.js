@@ -16,15 +16,15 @@ const raster = new TileLayer({
 const wktStrings = [
   `CURVEPOLYGON ZM(
     COMPOUNDCURVE ZM(
-      CIRCULARSTRING ZM(1 2 3 4, 2 4 1 2, 4 2 2 4),
-      LINESTRING ZM(4 2 5 4, 5 4 3 2, 4 5 4 2),
-      CIRCULARSTRING ZM(4 5 5 4, 3 6 2 1, 4 8 4 2),
-      LINESTRING ZM(4 8 3 2, 8 4 4 2, 8 -2 1 3, 2 -2 3 1, 1 2 4 5)
+        CIRCULARSTRING ZM(8 2 3 4, 9 4 1 2, 11 2 2 4), 
+        LINESTRING ZM(11 2 5 4, 12 4 3 2, 11 5 4 2), 
+        CIRCULARSTRING ZM(11 5 5 4, 10 6 2 1, 11 8 4 2), 
+        LINESTRING ZM(11 8 3 2, 15 4 4 2, 15 -2 1 3, 9 -2 3 1, 8 2 4 5)
     ),
-    CIRCULARSTRING ZM(1.5 2.5 4 2, 2 3 1 2, 3 1.5 5 4, 2 1 3 2, 1.5 2.5 2 3),
-    CIRCULARSTRING ZM(2 0 4 2, 3 0 1 3, 2 0 5 4),
-    LINESTRING ZM(7 1 3 2, 6 2 4 1, 5 1 5 4, 7 1 4 2)
-    )`, // XYZM
+    CIRCULARSTRING ZM(8.5 2.5 4 2, 9 3 1 2, 10 1.5 5 4, 9 1 3 2, 8.5 2.5 2 3),
+    CIRCULARSTRING ZM(9 0 4 2, 10 0 1 3, 9 0 5 4),
+    LINESTRING ZM(14 1 3 2, 13 2 4 1, 12 1 5 4, 14 1 4 2)
+)`, // XYZM
   `CURVEPOLYGON(
     COMPOUNDCURVE(
       CIRCULARSTRING(23 6, 20 7, 24 8),
@@ -123,10 +123,12 @@ const selectedFeatureStyle = new Style({
     width: 2,
   }),
 });
+
 const selectClick = new Select({
   condition: click,
   style: selectedFeatureStyle,
 });
+
 map.addInteraction(selectClick);
 
 selectClick.on("select", function (e) {
@@ -138,4 +140,41 @@ selectClick.on("select", function (e) {
     " and deselected " +
     e.deselected.length +
     " features)";
+});
+
+const info = document.getElementById("info");
+
+let hoverFeatures = [];
+
+const displayFeatureInfo = function (pixel) {
+  // Clear the hoverFeatures array before adding new features
+  hoverFeatures.length = 0;
+
+  map.forEachFeatureAtPixel(pixel, function (feature) {
+    hoverFeatures.push(feature);
+  });
+
+  // Update the info element based on the hover features
+  if (hoverFeatures.length) {
+    info.style.left = pixel[0] + 10 + "px";
+    info.style.top = pixel[1] + "px";
+    info.style.visibility = "visible";
+    info.innerText = hoverFeatures.length + " features";
+  } else {
+    info.style.visibility = "hidden";
+  }
+};
+
+map.on("pointermove", function (evt) {
+  if (evt.dragging) {
+    info.style.visibility = "hidden";
+    return;
+  }
+  const pixel = map.getEventPixel(evt.originalEvent);
+  displayFeatureInfo(pixel);
+});
+
+map.getTargetElement().addEventListener("pointerleave", function () {
+  hoverFeatures.length = 0; // Clear the array when the pointer leaves the map
+  info.style.visibility = "hidden";
 });

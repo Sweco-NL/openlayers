@@ -77,6 +77,7 @@
      this.setFillStrokeStyles();
      this.beginGeometry(curvePolygonGeometry, feature);
      this.instructions.push(beginPathInstruction);
+     this.hitDetectionInstructions.push(beginPathInstruction);
      this.hitDetectionInstructions.push([
        CanvasInstruction.SET_FILL_STYLE,
        defaultFillStyle,
