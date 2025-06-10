@@ -23,6 +23,8 @@ import {
 } from '../canvas.js';
 import CanvasInstruction from './Instruction.js';
 import {TEXT_ALIGN} from './TextBuilder.js';
+import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
+import {distance} from '../../coordinate.js';
 
 /**
  * @typedef {import('../../structs/RBush.js').Entry<import('../../Feature.js').FeatureLike>} DeclutterEntry
@@ -683,6 +685,8 @@ class Executor {
     hitExtent,
     declutterTree,
   ) {
+    let lastFillInstruction = null;
+    let lastStrokeInstruction = null;
     const zIndexContext = this.zIndexContext_;
     /** @type {Array<number>} */
     let pixelCoordinates;
@@ -718,7 +722,9 @@ class Executor {
       text,
       textKey,
       strokeKey,
-      fillKey;
+      fillKey,
+      endX,
+      endY;
     let pendingFill = 0;
     let pendingStroke = 0;
     const coordinateCache = this.coordinateCache_;
@@ -778,6 +784,113 @@ class Executor {
             prevX = NaN;
             prevY = NaN;
           }
+          ++i;
+          break;
+        case CanvasInstruction.MOVE_TO_ARC_TO:
+          if (lastFillInstruction) {
+            pendingFill++;
+          }
+          if (lastStrokeInstruction) {
+            pendingStroke++;
+          }
+          d = /** @type {number} */ (instruction[1]); // start arc
+          dd = /** @type {number} */ (instruction[2]) - 2; // end
+
+          for (let arcIndex = 0; d < dd; d += 6, ++arcIndex) {
+            const beginX = pixelCoordinates[d];
+            const beginY = pixelCoordinates[d + 1];
+            const middleX = pixelCoordinates[d + 2];
+            const middleY = pixelCoordinates[d + 3];
+            const centerOfCircleX = pixelCoordinates[d + 4];
+            const centerOfCircleY = pixelCoordinates[d + 5];
+            endX = pixelCoordinates[d + 6];
+            endY = pixelCoordinates[d + 7];
+
+            const arc = new CircularArc(new Vector2(beginX, beginY), new Vector2(middleX, middleY), new Vector2(endX, endY));
+            const fullCircle = arc.fullCircle();
+            const radius = distance([beginX, beginY], [centerOfCircleX, centerOfCircleY]);
+
+            if (arcIndex === 0) {
+              const moveToX = fullCircle ? centerOfCircleX + radius : beginX;
+              const moveToY = fullCircle ? centerOfCircleY : beginY;
+              context.moveTo(moveToX, moveToY);
+            }
+            
+            if (fullCircle) {
+              // If it's a full circle, draw a complete 0-to-2PI arc.
+              context.arc(centerOfCircleX, centerOfCircleY, radius, 0, 2 * Math.PI, true);
+            } else {
+              // Otherwise, draw the arc segment as defined by the angles.
+              const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
+              context.arc(centerOfCircleX, centerOfCircleY, radius, angles.startAngle, angles.endAngle, arc.clockwise(angles));
+            }
+          }
+          
+          if (typeof endX !== 'undefined') {
+            prevX = (endX + 0.5) | 0;
+            prevY = (endY + 0.5) | 0;
+          }
+          
+          ++i;
+          break;
+        case CanvasInstruction.LINE_TO:
+          if (lastFillInstruction) {
+            pendingFill++;
+          }
+          if (lastStrokeInstruction) {
+            pendingStroke++;
+          }          
+          d = /** @type {number} */ (instruction[1]);
+          dd = /** @type {number} */ (instruction[2]);
+          for (; d < dd; d += 2) {
+            x = pixelCoordinates[d];
+            y = pixelCoordinates[d + 1];
+            context.lineTo(x, y);
+          }
+          prevX = (x + 0.5) | 0;
+          prevY = (y + 0.5) | 0;
+          
+          ++i;
+          break;
+        case CanvasInstruction.ARC_TO:
+          if (lastFillInstruction) {
+            pendingFill++;
+          }
+          if (lastStrokeInstruction) {
+            pendingStroke++;
+          }
+          d = /** @type {number} */ (instruction[1]);
+          dd = /** @type {number} */ (instruction[2]) - 2;
+
+          for (; d < dd; d += 6) {
+            const beginX = pixelCoordinates[d];
+            const beginY = pixelCoordinates[d + 1];
+            const middleX = pixelCoordinates[d + 2];
+            const middleY = pixelCoordinates[d + 3];
+            const centerOfCircleX = pixelCoordinates[d + 4];
+            const centerOfCircleY = pixelCoordinates[d + 5];
+            endX = pixelCoordinates[d + 6];
+            endY = pixelCoordinates[d + 7];
+
+            const arc = new CircularArc(new Vector2(beginX, beginY), new Vector2(middleX, middleY), new Vector2(endX, endY));
+            const fullCircle = arc.fullCircle();
+            const radius = distance([beginX, beginY], [centerOfCircleX, centerOfCircleY]);
+
+            if (fullCircle) {
+              // Draw a complete 0-to-2PI arc.
+              context.arc(centerOfCircleX, centerOfCircleY, radius, 0, 2 * Math.PI, true);
+            } else {
+              // Draw the arc segment.
+              const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
+              context.arc(centerOfCircleX, centerOfCircleY, radius, angles.startAngle, angles.endAngle, arc.clockwise(angles));
+            }
+          }
+          
+          if (typeof endX !== 'undefined') {
+            prevX = (endX + 0.5) | 0;
+            prevY = (endY + 0.5) | 0;
+          }
+
           ++i;
           break;
         case CanvasInstruction.CIRCLE:

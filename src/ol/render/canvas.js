@@ -8,7 +8,7 @@ import {WORKER_OFFSCREEN_CANVAS} from '../has.js';
 import {clear} from '../obj.js';
 
 /**
- * @typedef {'Circle' | 'Image' | 'LineString' | 'Polygon' | 'Text' | 'Default'} BuilderType
+ * @typedef {'Circle' | 'Image' | 'LineString' | 'Polygon' | 'Text' | 'CircularString' | 'CompoundCurve' | 'CurvePolygon' | 'Default'} BuilderType
  */
 
 /**
