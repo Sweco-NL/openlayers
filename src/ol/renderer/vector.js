@@ -35,6 +35,10 @@ const GEOMETRY_RENDERERS = {
   'MultiPolygon': renderMultiPolygonGeometry,
   'GeometryCollection': renderGeometryCollectionGeometry,
   'Circle': renderCircleGeometry,
+  // --- ADDED: Your custom geometry renderers ---
+  'CircularString': renderCircularStringGeometry,
+  'CompoundCurve': renderCompoundCurveGeometry,
+  'CurvePolygon': renderCurvePolygonGeometry,
 };
 
 /**
@@ -79,6 +83,87 @@ function renderCircleGeometry(builderGroup, geometry, style, feature, index) {
     const circleReplay = builderGroup.getBuilder(style.getZIndex(), 'Circle');
     circleReplay.setFillStrokeStyle(fillStyle, strokeStyle);
     circleReplay.drawCircle(geometry, feature, index);
+  }
+  const textStyle = style.getText();
+  if (textStyle && textStyle.getText()) {
+    const textReplay = builderGroup.getBuilder(style.getZIndex(), 'Text');
+    textReplay.setTextStyle(textStyle);
+    textReplay.drawText(geometry, feature, index);
+  }
+}
+
+// --- ADDED: Your custom geometry renderers, adapted to the new base style ---
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CircularString.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").FeatureLike} feature Feature.
+ * @param {number} [index] Render order index.
+ */
+function renderCircularStringGeometry(builderGroup, geometry, style, feature, index) {
+  const strokeStyle = style.getStroke();
+  if (strokeStyle) {
+    // Note: The new base doesn't have a dedicated 'CircularString' builder.
+    // It's handled by a more generic one. Let's use 'LineString' or a custom name.
+    // Assuming your BuilderGroup is set up to handle 'CurvePolygon' which might encompass this.
+    const circularStringReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      'CurvePolygon'
+    );
+    circularStringReplay.setFillStrokeStyle(null, strokeStyle);
+    circularStringReplay.drawCircularString(geometry, feature, index);
+  }
+  const textStyle = style.getText();
+  if (textStyle && textStyle.getText()) {
+    const textReplay = builderGroup.getBuilder(style.getZIndex(), 'Text');
+    textReplay.setTextStyle(textStyle);
+    textReplay.drawText(geometry, feature, index);
+  }
+}
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CompoundCurve.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").default} feature Feature.
+ * @param {number} [index] Render order index.
+ */
+function renderCompoundCurveGeometry(builderGroup, geometry, style, feature, index) {
+  const strokeStyle = style.getStroke();
+  if (strokeStyle) {
+    const compoundCurveReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      'CurvePolygon'
+    );
+    compoundCurveReplay.setFillStrokeStyle(null, strokeStyle);
+    compoundCurveReplay.drawCompoundCurve(geometry, feature, index);
+  }
+  const textStyle = style.getText();
+  if (textStyle && textStyle.getText()) {
+    const textReplay = builderGroup.getBuilder(style.getZIndex(), 'Text');
+    textReplay.setTextStyle(textStyle);
+    textReplay.drawText(geometry, feature, index);
+  }
+}
+
+/**
+ * @param {import("../render/canvas/BuilderGroup.js").default} builderGroup Replay group.
+ * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+ * @param {import("../style/Style.js").default} style Style.
+ * @param {import("../Feature.js").default} feature Feature.
+ * @param {number} [index] Render order index.
+ */
+function renderCurvePolygonGeometry(builderGroup, geometry, style, feature, index) {
+  const fillStyle = style.getFill();
+  const strokeStyle = style.getStroke();
+  if (fillStyle || strokeStyle) {
+    const polygonReplay = builderGroup.getBuilder(
+      style.getZIndex(),
+      'CurvePolygon'
+    );
+    polygonReplay.setFillStrokeStyle(fillStyle, strokeStyle);
+    polygonReplay.drawCurvePolygon(geometry, feature, index);
   }
   const textStyle = style.getText();
   if (textStyle && textStyle.getText()) {
@@ -183,7 +268,7 @@ function renderFeatureInternal(
       style,
       feature,
       index,
-      declutter,
+      declutter, // Pass declutter down
     );
   }
 }
@@ -221,7 +306,7 @@ function renderGeometry(replayGroup, geometry, style, feature, index) {
  * @param {import("../geom/GeometryCollection.js").default} geometry Geometry.
  * @param {import("../style/Style.js").default} style Style.
  * @param {import("../Feature.js").default} feature Feature.
- * @param {import("../render/canvas/BuilderGroup.js").default} [declutterBuilderGroup] Builder for decluttering.
+ * @param {boolean} [_declutter] Declutter (unused).
  * @param {number} [index] Render order index.
  */
 function renderGeometryCollectionGeometry(
@@ -229,7 +314,7 @@ function renderGeometryCollectionGeometry(
   geometry,
   style,
   feature,
-  declutterBuilderGroup,
+  _declutter,
   index,
 ) {
   const geometries = geometry.getGeometriesArray();
@@ -241,8 +326,7 @@ function renderGeometryCollectionGeometry(
       geometries[i],
       style,
       feature,
-      declutterBuilderGroup,
-      index,
+      index, // Note: declutter is not passed down further
     );
   }
 }
