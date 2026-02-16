@@ -205,11 +205,19 @@ export class CircularArc {
     if (this.fullCircle()) {
       return extremes;
     }
-
+  
     const coords = [this.begin, this.end];
     const start = !clockwise ? startAngle : endAngle;
     const end = !clockwise ? endAngle : startAngle;
-    const startToEnd = this.angleDistance(start, end);
+    let startToEnd = this.angleDistance(start, end);
+
+    // Validate sweep using the middle point: if middle falls outside
+    // the computed sweep, we picked the wrong arc (near-complete circle case)
+    const middleAngle = angleFromOrigin(centerOfCircle, this.middle);
+    const startToMiddle = this.angleDistance(start, middleAngle);
+    if (startToMiddle > startToEnd) {
+      startToEnd = 2 * Math.PI - startToEnd;
+    }
 
     extremes.forEach((extreme) => {
       const angle = angleFromOrigin(centerOfCircle, extreme);
@@ -247,19 +255,13 @@ export class CircularArc {
 
   /**
    * Computes and returns if the arc moves in clockwise direction.
-   * @param {{startAngle: number, endAngle: number, middleAngle: number}} angles The begin, middle and end angles.
    * @return {boolean} True if clockwise, false otherwise.
    */
-  clockwise = (angles) => {
-    // compute the CCW distance from start to middle and from start to end
-    const startToMiddle = this.angleDistance(
-      angles.startAngle,
-      angles.middleAngle
-    );
-    const startToEnd = this.angleDistance(angles.startAngle, angles.endAngle);
-
-    // clockwise if in CCW direction we reach end before we reach middle
-    return startToEnd < startToMiddle;
+  clockwise = () => {
+    const cross =
+      (this.middle.x - this.begin.x) * (this.end.y - this.begin.y) -
+      (this.middle.y - this.begin.y) * (this.end.x - this.begin.x);
+    return cross < 0;
   };
 
   /**
