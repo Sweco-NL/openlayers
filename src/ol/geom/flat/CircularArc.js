@@ -1,4 +1,14 @@
 /**
+ * @module ol/geom/flat/CircularArc
+ */
+
+/**
+ * Tolerance for coincident point and collinearity checks.
+ * @type {number}
+ */
+const EPSILON = 1e-10;
+
+/**
  * Computes and returns the CCW angle at a specific vector wrt. the given origin.
  * The angle is returned in radians and ranges from 0 to +2PI.
  * @param {Vector2} origin The given origin.
@@ -31,41 +41,53 @@ export class Vector2 {
    * @param {Vector2} other The given other vector.
    * @return {Vector2} The resulting vector.
    */
-  add = (other) => new Vector2(this.x + other.x, this.y + other.y);
+  add(other) {
+    return new Vector2(this.x + other.x, this.y + other.y);
+  }
 
   /**
    * Subtracts a given other vector and returns the result.
    * @param {Vector2} other The given other vector.
    * @return {Vector2} The resulting vector.
    */
-  subtract = (other) => new Vector2(this.x - other.x, this.y - other.y);
+  subtract(other) {
+    return new Vector2(this.x - other.x, this.y - other.y);
+  }
 
   /**
    * Multiplies this vector with the given multiplier and returns the result.
    * @param {number} multiplier The multiplication factor.
    * @return {Vector2} The resulting vector.
    */
-  times = (multiplier) => new Vector2(this.x * multiplier, this.y * multiplier);
+  times(multiplier) {
+    return new Vector2(this.x * multiplier, this.y * multiplier);
+  }
 
   /**
    * Computes and returns the vector's magnitude.
    * @return {number} The computed magnitude.
    */
-  magnitude = () => Math.sqrt(this.x * this.x + this.y * this.y);
+  magnitude() {
+    return Math.sqrt(this.x * this.x + this.y * this.y);
+  }
 
   /**
    * Rotates the vector 90 degrees around the origin in clockwise direction
    * and returns the result.
    * @return {Vector2} The resulting vector.
    */
-  rotated90ClockWise = () => new Vector2(-this.y, this.x);
+  rotated90ClockWise() {
+    return new Vector2(-this.y, this.x);
+  }
 
   /**
    * Computes and returns the distance from this vector to a given other.
    * @param {Vector2} other The given other vector.
    * @return {number} The computed distance.
    */
-  distance = (other) => this.subtract(other).magnitude();
+  distance(other) {
+    return this.subtract(other).magnitude();
+  }
 
   /**
    * Tests if this vector and the given other vector are equal. They are
@@ -73,16 +95,18 @@ export class Vector2 {
    * @param {Vector2} other The given other vector.
    * @return {boolean} True if equal, false otherwise.
    */
-  equals = (other) => this.distance(other) < 1e-6;
+  equals(other) {
+    return this.distance(other) < 1e-6;
+  }
 
   /**
    * Computes and returns the normalized version of this vector.
    * @return {Vector2} The normalized vector.
    */
-  normalized = () => {
+  normalized() {
     const magnitude = this.magnitude();
     return new Vector2(this.x / magnitude, this.y / magnitude);
-  };
+  }
 }
 
 class Line {
@@ -100,23 +124,28 @@ class Line {
    * Computes and returns the center of the line.
    * @return {Vector2} The center.
    */
-  center = () =>
-    new Vector2(
-      (this.begin.x + this.end.x) / 2.0,
-      (this.begin.y + this.end.y) / 2.0
+  center() {
+    return new Vector2(
+      (this.begin.x + this.end.x) / 2,
+      (this.begin.y + this.end.y) / 2,
     );
+  }
 
   /**
    * Computes and returns the length of the line.
    * @return {number} The length.
    */
-  length = () => this.end.subtract(this.begin).magnitude();
+  length() {
+    return this.end.subtract(this.begin).magnitude();
+  }
 
   /**
    * Computes and returns a unit vector in direction of the line's end.
    * @return {Vector2} The computed unit vector.
    */
-  unit = () => this.end.subtract(this.begin).normalized();
+  unit() {
+    return this.end.subtract(this.begin).normalized();
+  }
 
   /**
    * Computes and returns the vector at which this line and a given other line
@@ -126,7 +155,7 @@ class Line {
    * @param {Line} other The given other line.
    * @return {Vector2} The vector of intersection.
    */
-  intersection = (other) => {
+  intersection(other) {
     // source:
     // https://dirask.com/posts/JavaScript-how-to-calculate-intersection-point-of-two-lines-for-given-4-points-VjvnAj
 
@@ -158,7 +187,7 @@ class Line {
     const py = (u1 * u2y - u3y * u4) / d;
 
     return new Vector2(px, py);
-  };
+  }
 }
 
 export class CircularArc {
@@ -171,7 +200,7 @@ export class CircularArc {
   constructor(
     begin = new Vector2(),
     middle = new Vector2(),
-    end = new Vector2()
+    end = new Vector2(),
   ) {
     this.begin = begin;
     this.middle = middle;
@@ -188,13 +217,7 @@ export class CircularArc {
    * @param {boolean} clockwise True if the arc is drawn in clockwise direction, false otherwise.
    * @return {Array<Vector2>} The array of bounding coordinates.
    */
-  boundingCoords = (
-    centerOfCircle,
-    radius,
-    startAngle,
-    endAngle,
-    clockwise
-  ) => {
+  boundingCoords(centerOfCircle, radius, startAngle, endAngle, clockwise) {
     const extremes = [
       centerOfCircle.add(new Vector2(0, radius)),
       centerOfCircle.add(new Vector2(radius, 0)),
@@ -205,13 +228,13 @@ export class CircularArc {
     if (this.fullCircle()) {
       return extremes;
     }
-  
+
     const coords = [this.begin, this.end];
     const start = !clockwise ? startAngle : endAngle;
     const end = !clockwise ? endAngle : startAngle;
     let startToEnd = this.angleDistance(start, end);
 
-    // Validate sweep using the middle point: if middle falls outside
+    // validate sweep using the middle point: if middle falls outside
     // the computed sweep, we picked the wrong arc (near-complete circle case)
     const middleAngle = angleFromOrigin(centerOfCircle, this.middle);
     const startToMiddle = this.angleDistance(start, middleAngle);
@@ -219,30 +242,34 @@ export class CircularArc {
       startToEnd = 2 * Math.PI - startToEnd;
     }
 
-    extremes.forEach((extreme) => {
-      const angle = angleFromOrigin(centerOfCircle, extreme);
+    for (let i = 0, ii = extremes.length; i < ii; ++i) {
+      const angle = angleFromOrigin(centerOfCircle, extremes[i]);
       const startToExtreme = this.angleDistance(start, angle);
 
       if (startToExtreme < startToEnd) {
-        coords.push(extreme);
+        coords.push(extremes[i]);
       }
-    });
+    }
 
     return coords;
-  };
+  }
 
   /**
    * Computes and returns the radius given the center of the circle.
    * @param {Vector2} center The center of the circle.
    * @return {number} The computed radius.
    */
-  radius = (center) => this.begin.subtract(center).magnitude();
+  radius(center) {
+    return this.begin.subtract(center).magnitude();
+  }
 
   /**
    * Returns if the arc concerns a full circle.
    * @return {boolean} True if so, false otherwise.
    */
-  fullCircle = () => this.begin.equals(this.end);
+  fullCircle() {
+    return this.begin.equals(this.end);
+  }
 
   /**
    * Computes and returns the CCW distance from the given start angle
@@ -251,18 +278,20 @@ export class CircularArc {
    * @param {number} end The angle in radians.
    * @return {number} The distance in radians.
    */
-  angleDistance = (start, end) => (end - start + 2 * Math.PI) % (2 * Math.PI);
+  angleDistance(start, end) {
+    return (end - start + 2 * Math.PI) % (2 * Math.PI);
+  }
 
   /**
    * Computes and returns if the arc moves in clockwise direction.
    * @return {boolean} True if clockwise, false otherwise.
    */
-  clockwise = () => {
+  clockwise() {
     const cross =
       (this.middle.x - this.begin.x) * (this.end.y - this.begin.y) -
       (this.middle.y - this.begin.y) * (this.end.x - this.begin.x);
     return cross < 0;
-  };
+  }
 
   /**
    * Computes and returns the angles at all three positions with the center
@@ -270,7 +299,7 @@ export class CircularArc {
    * @param {Vector2} center The optional center of the circle, if already known, otherwise it will be computed.
    * @return {{startAngle: number, endAngle: number, middleAngle: number}} The computed angles.
    */
-  angles = (center) => {
+  angles(center) {
     if (this.fullCircle()) {
       return {
         startAngle: 0,
@@ -286,32 +315,46 @@ export class CircularArc {
       middleAngle: angleFromOrigin(centerOfCircle, this.middle),
       endAngle: angleFromOrigin(centerOfCircle, this.end),
     };
-  };
+  }
 
   /**
    * Computes and returns the center of the circle.
-   * @return {Vector2} The center of the circle.
+   * @return {Vector2|null} The center of the circle, or null if points are
+   *     collinear or coincident.
    */
-  centerOfCircle = () => {
+  centerOfCircle() {
     if (this.fullCircle()) {
-      // three points represent a full circle
       return new Line(this.begin, this.middle).center();
     }
 
-    // no full circle
     const l1 = new Line(this.begin, this.middle);
     const l2 = new Line(this.middle, this.end);
 
+    // coincident points - no valid circle center
+    if (l1.length() < EPSILON || l2.length() < EPSILON) {
+      return null;
+    }
+
     const perpendicularL1 = new Line(
       l1.center(),
-      l1.center().add(l1.unit().rotated90ClockWise())
+      l1.center().add(l1.unit().rotated90ClockWise()),
     );
 
     const perpendicularL2 = new Line(
       l2.center(),
-      l2.center().add(l2.unit().rotated90ClockWise())
+      l2.center().add(l2.unit().rotated90ClockWise()),
     );
 
+    const p1 = perpendicularL1.begin;
+    const p2 = perpendicularL1.end;
+    const p3 = perpendicularL2.begin;
+    const p4 = perpendicularL2.end;
+    const d = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(d) < EPSILON) {
+      // perpendicular bisectors are parallel - points are collinear
+      return null;
+    }
+
     return perpendicularL1.intersection(perpendicularL2);
-  };
+  }
 }

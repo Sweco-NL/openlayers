@@ -3,6 +3,9 @@
  */
 
 export {default as Circle} from './geom/Circle.js';
+export {default as CircularString} from './geom/CircularString.js';
+export {default as CompoundCurve} from './geom/CompoundCurve.js';
+export {default as CurvePolygon} from './geom/CurvePolygon.js';
 export {default as Geometry} from './geom/Geometry.js';
 export {default as GeometryCollection} from './geom/GeometryCollection.js';
 export {default as LinearRing} from './geom/LinearRing.js';

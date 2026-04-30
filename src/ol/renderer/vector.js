@@ -104,12 +104,9 @@ function renderCircleGeometry(builderGroup, geometry, style, feature, index) {
 function renderCircularStringGeometry(builderGroup, geometry, style, feature, index) {
   const strokeStyle = style.getStroke();
   if (strokeStyle) {
-    // Note: The new base doesn't have a dedicated 'CircularString' builder.
-    // It's handled by a more generic one. Let's use 'LineString' or a custom name.
-    // Assuming your BuilderGroup is set up to handle 'CurvePolygon' which might encompass this.
     const circularStringReplay = builderGroup.getBuilder(
       style.getZIndex(),
-      'CurvePolygon'
+      'CircularString'
     );
     circularStringReplay.setFillStrokeStyle(null, strokeStyle);
     circularStringReplay.drawCircularString(geometry, feature, index);
@@ -134,7 +131,7 @@ function renderCompoundCurveGeometry(builderGroup, geometry, style, feature, ind
   if (strokeStyle) {
     const compoundCurveReplay = builderGroup.getBuilder(
       style.getZIndex(),
-      'CurvePolygon'
+      'CompoundCurve'
     );
     compoundCurveReplay.setFillStrokeStyle(null, strokeStyle);
     compoundCurveReplay.drawCompoundCurve(geometry, feature, index);

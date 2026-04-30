@@ -1,6 +1,12 @@
 /**
  * @module ol/render/canvas/CurveBuilder
  */
+import {
+  defaultFillStyle,
+  defaultLineDash,
+  defaultLineDashOffset,
+  defaultStrokeStyle,
+} from '../canvas.js';
 import CanvasBuilder from './Builder.js';
 import CanvasInstruction, {
   beginPathInstruction,
@@ -8,7 +14,6 @@ import CanvasInstruction, {
   fillInstruction,
   strokeInstruction,
 } from './Instruction.js';
-import { defaultFillStyle } from '../canvas.js';
 
 class CanvasCurveBuilder extends CanvasBuilder {
   /**
@@ -22,12 +27,12 @@ class CanvasCurveBuilder extends CanvasBuilder {
   }
 
   /**
-   * @override
    * Adds instructions for drawing the provided circular string geometry.
    * @param {import("../../geom/CircularString.js").default} circularStringGeometry
    * The given geometry.
    * @param {import("../../Feature.js").FeatureLike} feature The given feature.
    * @param {number} [index] Render order index.
+   * @override
    */
   drawCircularString(circularStringGeometry, feature, index) {
     const state = this.state;
@@ -38,19 +43,35 @@ class CanvasCurveBuilder extends CanvasBuilder {
     }
     this.updateStrokeStyle(state, this.applyStroke);
     this.beginGeometry(circularStringGeometry, feature, index);
-    this.appendCircularStringInstruction(
-      circularStringGeometry.getDrawableFlatCoordinates()
+    this.hitDetectionInstructions.push(
+      [
+        CanvasInstruction.SET_STROKE_STYLE,
+        defaultStrokeStyle,
+        state.lineWidth,
+        state.lineCap,
+        state.lineJoin,
+        state.miterLimit,
+        defaultLineDash,
+        defaultLineDashOffset,
+      ],
+      beginPathInstruction,
     );
+    this.instructions.push(beginPathInstruction);
+    this.appendCircularStringInstruction(
+      circularStringGeometry.getDrawableFlatCoordinates(),
+    );
+    this.instructions.push(strokeInstruction);
+    this.hitDetectionInstructions.push(strokeInstruction);
     this.endGeometry(feature);
   }
 
   /**
-   * @override
    * Adds instructions for drawing the provided compound curve geometry.
    * @param {import("../../geom/CompoundCurve.js").default} compoundCurveGeometry
    * The given geometry.
    * @param {import("../../Feature.js").FeatureLike} feature The given feature.
    * @param {number} [index] Render order index.
+   * @override
    */
   drawCompoundCurve(compoundCurveGeometry, feature, index) {
     const state = this.state;
@@ -61,17 +82,33 @@ class CanvasCurveBuilder extends CanvasBuilder {
     }
     this.updateStrokeStyle(state, this.applyStroke);
     this.beginGeometry(compoundCurveGeometry, feature, index);
+    this.hitDetectionInstructions.push(
+      [
+        CanvasInstruction.SET_STROKE_STYLE,
+        defaultStrokeStyle,
+        state.lineWidth,
+        state.lineCap,
+        state.lineJoin,
+        state.miterLimit,
+        defaultLineDash,
+        defaultLineDashOffset,
+      ],
+      beginPathInstruction,
+    );
+    this.instructions.push(beginPathInstruction);
     this.appendCompoundCurveInstructions(compoundCurveGeometry);
+    this.instructions.push(strokeInstruction);
+    this.hitDetectionInstructions.push(strokeInstruction);
     this.endGeometry(feature);
   }
 
   /**
-   * @override
    * Adds instructions for drawing the provided curve polygon geometry.
    * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry
    * The given geometry.
    * @param {import("../../Feature.js").FeatureLike} feature The given feature.
    * @param {number} [index] Render order index.
+   * @override
    */
   drawCurvePolygon(curvePolygonGeometry, feature, index) {
     const state = this.state;
@@ -102,25 +139,27 @@ class CanvasCurveBuilder extends CanvasBuilder {
     const state = this.state;
     const fill = state.fillStyle !== undefined;
     const stroke = state.strokeStyle !== undefined;
-    curvePolygonGeometry.getRings().forEach((ring) => {
+    const rings = curvePolygonGeometry.getRings();
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const ring = rings[i];
       // eslint-disable-next-line default-case
       switch (ring.getType()) {
         case 'LineString':
           this.appendLineStringInstruction(
             ring.getFlatCoordinates(),
-            ring.getStride()
+            ring.getStride(),
           );
           break;
         case 'CircularString':
           this.appendCircularStringInstruction(
-            /** @type {import("../../geom/CircularString.js").default} **/ (
+            /** @type {import("../../geom/CircularString.js").default} */ (
               ring
-            ).getDrawableFlatCoordinates()
+            ).getDrawableFlatCoordinates(),
           );
           break;
         case 'CompoundCurve':
           this.appendCompoundCurveInstructions(
-            /** @type {import("../../geom/CompoundCurve.js").default} */ (ring)
+            /** @type {import("../../geom/CompoundCurve.js").default} */ (ring),
           );
           break;
       }
@@ -128,7 +167,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
         this.instructions.push(closePathInstruction);
         this.hitDetectionInstructions.push(closePathInstruction);
       }
-    });
+    }
     if (fill) {
       this.instructions.push(fillInstruction);
       this.hitDetectionInstructions.push(fillInstruction);
@@ -148,37 +187,44 @@ class CanvasCurveBuilder extends CanvasBuilder {
    */
   appendCompoundCurveInstructions(compoundCurveGeometry) {
     let geometryFlatCoords = [];
-    compoundCurveGeometry.getGeometries().forEach((geometry, index) => {
-      const moveTo = index === 0; // Only move to for the first segment!
+    const geometries = compoundCurveGeometry.getGeometriesArray();
+    for (let i = 0, ii = geometries.length; i < ii; ++i) {
+      const geometry = geometries[i];
+      const moveTo = i === 0;
       const startIndex =
-        index > 0 ? this.coordinates.length - 2 : this.coordinates.length;
+        i > 0 ? this.coordinates.length - 2 : this.coordinates.length;
       // eslint-disable-next-line default-case
       switch (geometry.getType()) {
-        case 'CircularString':
+        case 'CircularString': {
           const circularString =
-            /** @type {import("../../geom/CircularString.js").default} **/ (
+            /** @type {import("../../geom/CircularString.js").default} */ (
               geometry
             );
           geometryFlatCoords =
-            index > 0
+            i > 0
               ? circularString.getDrawableFlatCoordinates().slice(2)
               : circularString.getDrawableFlatCoordinates();
-          this.appendCircularStringInstruction(geometryFlatCoords, startIndex, moveTo);
+          this.appendCircularStringInstruction(
+            geometryFlatCoords,
+            startIndex,
+            moveTo,
+          );
           break;
+        }
         case 'LineString':
           geometryFlatCoords =
-            index > 0
+            i > 0
               ? geometry.getFlatCoordinates().slice(geometry.getStride())
               : geometry.getFlatCoordinates();
           this.appendLineStringInstruction(
             geometryFlatCoords,
             geometry.getStride(),
             startIndex,
-            moveTo
+            moveTo,
           );
           break;
       }
-    });
+    }
   }
 
   /**
@@ -190,22 +236,19 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * @param {Array<number>} flatCoordinates The string's coordinates.
    * @param {number} startIndex The coordinate start index of the
    * MOVE_TO_ARC_TO instruction.
+   * @param {boolean} moveTo Whether to emit a MOVE_TO_ARC_TO or ARC_TO.
    */
-   appendCircularStringInstruction(
+  appendCircularStringInstruction(
     flatCoordinates,
     startIndex = this.coordinates.length,
-    moveTo = true
+    moveTo = true,
   ) {
     const endIndex = this.appendCoordinates(flatCoordinates, 2);
-    // Choose the correct instruction!
+    // choose the correct instruction
     const instructionType = moveTo
       ? CanvasInstruction.MOVE_TO_ARC_TO
       : CanvasInstruction.ARC_TO;
-    const instruction = [
-      instructionType,
-      startIndex,
-      endIndex,
-    ];
+    const instruction = [instructionType, startIndex, endIndex];
     this.instructions.push(instruction);
     this.hitDetectionInstructions.push(instruction);
   }
@@ -218,23 +261,20 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * @param {number} stride The coordinates' stride.
    * @param {number} startIndex The coordinate start index of the
    * MOVE_TO_LINE_TO instruction.
+   * @param {boolean} moveTo Whether to emit a MOVE_TO_LINE_TO or LINE_TO.
    */
   appendLineStringInstruction(
     flatCoordinates,
     stride,
     startIndex = this.coordinates.length,
-    moveTo = true
+    moveTo = true,
   ) {
     const endIndex = this.appendCoordinates(flatCoordinates, stride);
-    // Choose the correct instruction!
+    // choose the correct instruction
     const instructionType = moveTo
       ? CanvasInstruction.MOVE_TO_LINE_TO
       : CanvasInstruction.LINE_TO;
-    const instruction = [
-      instructionType,
-      startIndex,
-      endIndex,
-    ];
+    const instruction = [instructionType, startIndex, endIndex];
     this.instructions.push(instruction);
     this.hitDetectionInstructions.push(instruction);
   }

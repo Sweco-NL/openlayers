@@ -2,7 +2,9 @@
  * @module ol/render/canvas/Executor
  */
 import {equals} from '../../array.js';
+import {distance} from '../../coordinate.js';
 import {createEmpty, createOrUpdate, intersects} from '../../extent.js';
+import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
 import {lineStringLength} from '../../geom/flat/length.js';
 import {
   offsetLineString,
@@ -27,8 +29,6 @@ import {
 import ZIndexContext from '../canvas/ZIndexContext.js';
 import CanvasInstruction from './Instruction.js';
 import {TEXT_ALIGN} from './TextBuilder.js';
-import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
-import {distance} from '../../coordinate.js';
 
 /**
  * @typedef {import('../../structs/RBush.js').Entry<import('../../Feature.js').FeatureLike>} DeclutterEntry
@@ -80,13 +80,23 @@ function getDeclutterBox(replayImageOrLabelArgs) {
 
 const rtlRegEx = new RegExp(
   /* eslint-disable prettier/prettier */
-  '[' +
-    String.fromCharCode(0x00591) + '-' + String.fromCharCode(0x008ff) +
-    String.fromCharCode(0x0fb1d) + '-' + String.fromCharCode(0x0fdff) +
-    String.fromCharCode(0x0fe70) + '-' + String.fromCharCode(0x0fefc) +
-    String.fromCharCode(0x10800) + '-' + String.fromCharCode(0x10fff) +
-    String.fromCharCode(0x1e800) + '-' + String.fromCharCode(0x1efff) +
-  ']'
+  "[" +
+    String.fromCharCode(0x00591) +
+    "-" +
+    String.fromCharCode(0x008ff) +
+    String.fromCharCode(0x0fb1d) +
+    "-" +
+    String.fromCharCode(0x0fdff) +
+    String.fromCharCode(0x0fe70) +
+    "-" +
+    String.fromCharCode(0x0fefc) +
+    String.fromCharCode(0x10800) +
+    "-" +
+    String.fromCharCode(0x10fff) +
+    String.fromCharCode(0x1e800) +
+    "-" +
+    String.fromCharCode(0x1efff) +
+    "]",
   /* eslint-enable prettier/prettier */
 );
 
@@ -130,6 +140,68 @@ function richTextToPlainText(result, part, index) {
     result += part;
   }
   return result;
+}
+
+/**
+ * Draw arc segments on the canvas context.
+ * @param {CanvasRenderingContext2D|OffscreenCanvasRenderingContext2D} context Canvas context.
+ * @param {Array<number>} pixelCoordinates Pixel coordinates.
+ * @param {number} start Start offset into pixelCoordinates.
+ * @param {number} end End offset into pixelCoordinates.
+ * @param {boolean} moveTo Whether to moveTo the first arc start point.
+ * @return {{endX: number|undefined, endY: number|undefined}} Last endpoint.
+ */
+function drawArcs(context, pixelCoordinates, start, end, moveTo) {
+  let endX, endY;
+  for (let arcIndex = 0; start < end; start += 6, ++arcIndex) {
+    const beginX = pixelCoordinates[start];
+    const beginY = pixelCoordinates[start + 1];
+    const middleX = pixelCoordinates[start + 2];
+    const middleY = pixelCoordinates[start + 3];
+    const centerOfCircleX = pixelCoordinates[start + 4];
+    const centerOfCircleY = pixelCoordinates[start + 5];
+    endX = pixelCoordinates[start + 6];
+    endY = pixelCoordinates[start + 7];
+
+    const arc = new CircularArc(
+      new Vector2(beginX, beginY),
+      new Vector2(middleX, middleY),
+      new Vector2(endX, endY),
+    );
+    const fullCircle = arc.fullCircle();
+    const radius = distance(
+      [beginX, beginY],
+      [centerOfCircleX, centerOfCircleY],
+    );
+
+    if (moveTo && arcIndex === 0) {
+      const moveToX = fullCircle ? centerOfCircleX + radius : beginX;
+      const moveToY = fullCircle ? centerOfCircleY : beginY;
+      context.moveTo(moveToX, moveToY);
+    }
+
+    if (fullCircle) {
+      context.arc(
+        centerOfCircleX,
+        centerOfCircleY,
+        radius,
+        0,
+        2 * Math.PI,
+        true,
+      );
+    } else {
+      const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
+      context.arc(
+        centerOfCircleX,
+        centerOfCircleY,
+        radius,
+        angles.startAngle,
+        angles.endAngle,
+        arc.clockwise(),
+      );
+    }
+  }
+  return {endX, endY};
 }
 
 class Executor {
@@ -688,8 +760,8 @@ class Executor {
     hitExtent,
     declutterTree,
   ) {
-    let lastFillInstruction = null;
-    let lastStrokeInstruction = null;
+    const lastFillInstruction = null;
+    const lastStrokeInstruction = null;
     const zIndexContext = this.zIndexContext_;
     /** @type {Array<number>} */
     let pixelCoordinates;
@@ -798,44 +870,15 @@ class Executor {
           if (lastStrokeInstruction) {
             pendingStroke++;
           }
-          d = /** @type {number} */ (instruction[1]); // start arc
-          dd = /** @type {number} */ (instruction[2]) - 2; // end
+          d = /** @type {number} */ (instruction[1]);
+          dd = /** @type {number} */ (instruction[2]) - 2;
+          ({endX, endY} = drawArcs(context, pixelCoordinates, d, dd, true));
 
-          for (let arcIndex = 0; d < dd; d += 6, ++arcIndex) {
-            const beginX = pixelCoordinates[d];
-            const beginY = pixelCoordinates[d + 1];
-            const middleX = pixelCoordinates[d + 2];
-            const middleY = pixelCoordinates[d + 3];
-            const centerOfCircleX = pixelCoordinates[d + 4];
-            const centerOfCircleY = pixelCoordinates[d + 5];
-            endX = pixelCoordinates[d + 6];
-            endY = pixelCoordinates[d + 7];
-
-            const arc = new CircularArc(new Vector2(beginX, beginY), new Vector2(middleX, middleY), new Vector2(endX, endY));
-            const fullCircle = arc.fullCircle();
-            const radius = distance([beginX, beginY], [centerOfCircleX, centerOfCircleY]);
-
-            if (arcIndex === 0) {
-              const moveToX = fullCircle ? centerOfCircleX + radius : beginX;
-              const moveToY = fullCircle ? centerOfCircleY : beginY;
-              context.moveTo(moveToX, moveToY);
-            }
-            
-            if (fullCircle) {
-              // If it's a full circle, draw a complete 0-to-2PI arc.
-              context.arc(centerOfCircleX, centerOfCircleY, radius, 0, 2 * Math.PI, true);
-            } else {
-              // Otherwise, draw the arc segment as defined by the angles.
-              const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
-              context.arc(centerOfCircleX, centerOfCircleY, radius, angles.startAngle, angles.endAngle, arc.clockwise(angles));
-            }
-          }
-          
-          if (typeof endX !== 'undefined') {
+          if (endX !== undefined) {
             prevX = (endX + 0.5) | 0;
             prevY = (endY + 0.5) | 0;
           }
-          
+
           ++i;
           break;
         case CanvasInstruction.LINE_TO:
@@ -844,7 +887,7 @@ class Executor {
           }
           if (lastStrokeInstruction) {
             pendingStroke++;
-          }          
+          }
           d = /** @type {number} */ (instruction[1]);
           dd = /** @type {number} */ (instruction[2]);
           for (; d < dd; d += 2) {
@@ -854,7 +897,7 @@ class Executor {
           }
           prevX = (x + 0.5) | 0;
           prevY = (y + 0.5) | 0;
-          
+
           ++i;
           break;
         case CanvasInstruction.ARC_TO:
@@ -866,32 +909,9 @@ class Executor {
           }
           d = /** @type {number} */ (instruction[1]);
           dd = /** @type {number} */ (instruction[2]) - 2;
+          ({endX, endY} = drawArcs(context, pixelCoordinates, d, dd, false));
 
-          for (; d < dd; d += 6) {
-            const beginX = pixelCoordinates[d];
-            const beginY = pixelCoordinates[d + 1];
-            const middleX = pixelCoordinates[d + 2];
-            const middleY = pixelCoordinates[d + 3];
-            const centerOfCircleX = pixelCoordinates[d + 4];
-            const centerOfCircleY = pixelCoordinates[d + 5];
-            endX = pixelCoordinates[d + 6];
-            endY = pixelCoordinates[d + 7];
-
-            const arc = new CircularArc(new Vector2(beginX, beginY), new Vector2(middleX, middleY), new Vector2(endX, endY));
-            const fullCircle = arc.fullCircle();
-            const radius = distance([beginX, beginY], [centerOfCircleX, centerOfCircleY]);
-
-            if (fullCircle) {
-              // Draw a complete 0-to-2PI arc.
-              context.arc(centerOfCircleX, centerOfCircleY, radius, 0, 2 * Math.PI, true);
-            } else {
-              // Draw the arc segment.
-              const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
-              context.arc(centerOfCircleX, centerOfCircleY, radius, angles.startAngle, angles.endAngle, arc.clockwise(angles));
-            }
-          }
-          
-          if (typeof endX !== 'undefined') {
+          if (endX !== undefined) {
             prevX = (endX + 0.5) | 0;
             prevY = (endY + 0.5) | 0;
           }

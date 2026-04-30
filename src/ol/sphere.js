@@ -23,6 +23,45 @@ import {toDegrees, toRadians} from './math.js';
 export const DEFAULT_RADIUS = 6371008.8;
 
 /**
+ * Tessellate a ring geometry into flat stride-2 coordinates.
+ * Works for CircularString, CompoundCurve, LineString, and LinearRing.
+ * @param {import("./geom/CurvePolygon.js").CurveRing} ring The ring geometry.
+ * @return {Array<number>} Flat coordinates with stride 2.
+ */
+function tessellateRing(ring) {
+  const curved = /** @type {import("./geom/CircularString.js").default} */ (
+    ring
+  );
+  if (typeof curved.tessellate === 'function') {
+    return curved.tessellate();
+  }
+  // plain LineString/LinearRing - extract XY from flat coordinates
+  const simple = /** @type {import("./geom/SimpleGeometry.js").default} */ (
+    ring
+  );
+  const c = simple.getFlatCoordinates();
+  const s = simple.getStride();
+  const result = [];
+  for (let i = 0; i < c.length; i += s) {
+    result.push(c[i], c[i + 1]);
+  }
+  return result;
+}
+
+/**
+ * Convert flat stride-2 coordinates to an array of coordinate pairs.
+ * @param {Array<number>} flat Flat coordinates with stride 2.
+ * @return {Array<import("./coordinate.js").Coordinate>} Coordinate pairs.
+ */
+function flatToCoordinates(flat) {
+  const coords = [];
+  for (let i = 0, ii = flat.length; i < ii; i += 2) {
+    coords.push([flat[i], flat[i + 1]]);
+  }
+  return coords;
+}
+
+/**
  * Get the great circle distance (in meters) between two geographic coordinates.
  * @param {Array} c1 Starting coordinate.
  * @param {Array} c2 Ending coordinate.
@@ -127,6 +166,28 @@ export function getLength(geometry, options) {
       }
       break;
     }
+    case 'CircularString':
+    case 'CompoundCurve': {
+      const flat =
+        /** @type {import("./geom/CircularString.js").default} */ (
+          geometry
+        ).tessellate();
+      length = getLengthInternal(flatToCoordinates(flat), radius);
+      break;
+    }
+    case 'CurvePolygon': {
+      const cp = /** @type {import("./geom/CurvePolygon.js").default} */ (
+        geometry
+      );
+      const rings = cp.getRingsArray();
+      for (i = 0, ii = rings.length; i < ii; ++i) {
+        length += getLengthInternal(
+          flatToCoordinates(tessellateRing(rings[i])),
+          radius,
+        );
+      }
+      break;
+    }
     default: {
       throw new Error('Unsupported geometry type: ' + type);
     }
@@ -223,6 +284,23 @@ export function getArea(geometry, options) {
         ).getGeometries();
       for (i = 0, ii = geometries.length; i < ii; ++i) {
         area += getArea(geometries[i], options);
+      }
+      break;
+    }
+    case 'CircularString':
+    case 'CompoundCurve': {
+      break;
+    }
+    case 'CurvePolygon': {
+      const cp = /** @type {import("./geom/CurvePolygon.js").default} */ (
+        geometry
+      );
+      const rings = cp.getRingsArray();
+      const outerCoords = flatToCoordinates(tessellateRing(rings[0]));
+      area = Math.abs(getAreaInternal(outerCoords, radius));
+      for (i = 1, ii = rings.length; i < ii; ++i) {
+        const holeCoords = flatToCoordinates(tessellateRing(rings[i]));
+        area -= Math.abs(getAreaInternal(holeCoords, radius));
       }
       break;
     }

@@ -174,6 +174,7 @@ function getCoordinatesArray(coordinates, geometryType, depth) {
   let coordinatesArray;
   switch (geometryType) {
     case 'LineString':
+    case 'CircularString':
       coordinatesArray = coordinates;
       break;
     case 'MultiLineString':
@@ -421,6 +422,9 @@ class Modify extends PointerInteraction {
       MultiPolygon: this.writeMultiPolygonGeometry_.bind(this),
       Circle: this.writeCircleGeometry_.bind(this),
       GeometryCollection: this.writeGeometryCollectionGeometry_.bind(this),
+      CircularString: this.writeCircularStringGeometry_.bind(this),
+      CompoundCurve: this.writeCompoundCurveGeometry_.bind(this),
+      CurvePolygon: this.writeCurvePolygonGeometry_.bind(this),
     };
 
     /**
@@ -1018,6 +1022,75 @@ class Modify extends PointerInteraction {
   }
 
   /**
+   * @param {Feature} feature Feature.
+   * @param {import("../geom/CircularString.js").default} geometry Geometry.
+   * @private
+   */
+  writeCircularStringGeometry_(feature, geometry) {
+    const coordinates = geometry.getCoordinates();
+    // start from the geometry extent (covers the full arc curve) then
+    // expand to explicitly include every control point coordinate.
+    // this is necessary because geometry.getExtent() computes axis
+    // extremes via center+radius which can miss a control point by
+    // floating-point epsilon (e.g. maxY=2.9999999999999996 instead of
+    // 3.0), causing the RBush point query for that control point to fail.
+    const extent = geometry.getExtent().slice();
+    for (let j = 0; j < coordinates.length; ++j) {
+      extent[0] = Math.min(extent[0], coordinates[j][0]);
+      extent[1] = Math.min(extent[1], coordinates[j][1]);
+      extent[2] = Math.max(extent[2], coordinates[j][0]);
+      extent[3] = Math.max(extent[3], coordinates[j][1]);
+    }
+    /** @type {Array<SegmentData>} */
+    const featureSegments = [];
+    for (let i = 0, ii = coordinates.length - 1; i < ii; ++i) {
+      const segment = coordinates.slice(i, i + 2);
+      /** @type {SegmentData} */
+      const segmentData = {
+        feature: feature,
+        geometry: geometry,
+        index: i,
+        segment: segment,
+        featureSegments: featureSegments,
+      };
+      featureSegments.push(segmentData);
+      this.rBush_.insert(extent, segmentData);
+    }
+  }
+
+  /**
+   * @param {Feature} feature Feature.
+   * @param {import("../geom/CompoundCurve.js").default} geometry Geometry.
+   * @private
+   */
+  writeCompoundCurveGeometry_(feature, geometry) {
+    const geometries = geometry.getGeometriesArray();
+    for (let i = 0; i < geometries.length; ++i) {
+      const subGeometry = geometries[i];
+      const writer = this.SEGMENT_WRITERS_[subGeometry.getType()];
+      if (writer) {
+        writer(feature, subGeometry);
+      }
+    }
+  }
+
+  /**
+   * @param {Feature} feature Feature.
+   * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+   * @private
+   */
+  writeCurvePolygonGeometry_(feature, geometry) {
+    const rings = geometry.getRingsArray();
+    for (let i = 0; i < rings.length; ++i) {
+      const ring = rings[i];
+      const writer = this.SEGMENT_WRITERS_[ring.getType()];
+      if (writer) {
+        writer(feature, ring);
+      }
+    }
+  }
+
+  /**
    * @param {import("../coordinate.js").Coordinate} coordinates Coordinates.
    * @param {Array<Feature>} features The features being modified.
    * @param {Array<import("../geom/SimpleGeometry.js").default>} geometries The geometries being modified.
@@ -1155,6 +1228,12 @@ class Modify extends PointerInteraction {
             case 'LineString':
             case 'MultiLineString':
               continue;
+            // for closed CircularString rings, allow if it's the closing segment
+            case 'CircularString':
+              if (segmentDataMatch.index !== coordinates.length - 2) {
+                continue;
+              }
+              break;
             // if dragging the first vertex of a polygon, ensure the other segment
             // belongs to the closing vertex of the linear ring
             case 'MultiPolygon':
@@ -1498,6 +1577,25 @@ class Modify extends PointerInteraction {
         coordinates[segmentData.index + index] = vertex;
         segment[index] = vertex;
         break;
+      case 'CircularString': {
+        coordinates = geometry.getCoordinates();
+        const csTargetIndex = segmentData.index + index;
+        coordinates[csTargetIndex] = vertex;
+        // Sync ring closure if first==last
+        if (
+          coordinates.length > 1 &&
+          coordinates[0][0] === coordinates[coordinates.length - 1][0] &&
+          coordinates[0][1] === coordinates[coordinates.length - 1][1]
+        ) {
+          if (csTargetIndex === 0) {
+            coordinates[coordinates.length - 1] = vertex;
+          } else if (csTargetIndex === coordinates.length - 1) {
+            coordinates[0] = vertex;
+          }
+        }
+        segment[index] = vertex;
+        break;
+      }
       case 'MultiLineString':
         coordinates = geometry.getCoordinates();
         coordinates[depth[0]][segmentData.index + index] = vertex;
@@ -1712,6 +1810,25 @@ class Modify extends PointerInteraction {
           circleGeometry.getExtent(),
           circumferenceSegmentData,
         );
+      } else if (geometry.getType() === 'CircularString') {
+        const csExtent = geometry.getExtent().slice();
+        const csCoords = geometry.getCoordinates();
+        for (let j = 0; j < csCoords.length; ++j) {
+          csExtent[0] = Math.min(csExtent[0], csCoords[j][0]);
+          csExtent[1] = Math.min(csExtent[1], csCoords[j][1]);
+          csExtent[2] = Math.max(csExtent[2], csCoords[j][0]);
+          csExtent[3] = Math.max(csExtent[3], csCoords[j][1]);
+        }
+        // update ALL segments of this CircularString, not just the
+        // dragged one, because moving any control point changes the
+        // full geometry extent that all segments share.
+        if (segmentData.featureSegments) {
+          for (const sd of segmentData.featureSegments) {
+            this.rBush_.update(csExtent, sd);
+          }
+        } else {
+          this.rBush_.update(csExtent, segmentData);
+        }
       } else {
         this.rBush_.update(boundingExtent(segmentData.segment), segmentData);
       }
@@ -1931,6 +2048,187 @@ class Modify extends PointerInteraction {
         coordinates = geometry.getCoordinates();
         coordinates.splice(index + 1, 0, vertex);
         break;
+      case 'CircularString': {
+        coordinates = geometry.getCoordinates();
+        const arcIndex = Math.floor(index / 2);
+        const isFirstHalf = index % 2 === 0;
+        const circGeom =
+          /** @type {import("../geom/CircularString.js").default} */ (geometry);
+        const centerCoord = circGeom.flatCenterOfCircle(arcIndex);
+        const cx = centerCoord[0],
+          cy = centerCoord[1];
+
+        // check for degenerate (collinear) arc
+        const arcStart = coordinates[arcIndex * 2];
+        const arcMid = coordinates[arcIndex * 2 + 1];
+        const arcEnd = coordinates[arcIndex * 2 + 2];
+        const isDegenerate =
+          (cx === (arcStart[0] + arcEnd[0]) / 2 &&
+            cy === (arcStart[1] + arcEnd[1]) / 2) ||
+          (Math.abs(
+            (arcMid[0] - arcStart[0]) * (arcEnd[1] - arcStart[1]) -
+              (arcMid[1] - arcStart[1]) * (arcEnd[0] - arcStart[0]),
+          ) < 1e-10);
+
+        if (isDegenerate) {
+          // degenerate (collinear) arc - just insert like a line segment
+          coordinates.splice(index + 1, 0, vertex);
+          break;
+        }
+
+        const radius = Math.sqrt(
+          (arcStart[0] - cx) * (arcStart[0] - cx) +
+            (arcStart[1] - cy) * (arcStart[1] - cy),
+        );
+
+        // determine clockwise from start/mid/end angles
+        let sAngle = Math.atan2(arcStart[1] - cy, arcStart[0] - cx);
+        let mAngle = Math.atan2(arcMid[1] - cy, arcMid[0] - cx);
+        let eAngle = Math.atan2(arcEnd[1] - cy, arcEnd[0] - cx);
+        if (sAngle < 0) {
+          sAngle += 2 * Math.PI;
+        }
+        if (mAngle < 0) {
+          mAngle += 2 * Math.PI;
+        }
+        if (eAngle < 0) {
+          eAngle += 2 * Math.PI;
+        }
+        // arc is CW if midpoint is NOT on the CCW path from start to end
+        const ccwSweep =
+          ((eAngle - sAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+        const midFromStart =
+          ((mAngle - sAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+        const cw = !(midFromStart <= ccwSweep);
+
+        // compute the midpoint of the sub-arc that needs a new control point
+        let subStart, subEnd;
+        if (isFirstHalf) {
+          // clicked on segment [A, M] - P is between A and M on the arc
+          // arc 1 = (A, X, P), arc 2 = (P, M, C) - M stays
+          subStart = arcStart;
+          subEnd = vertex;
+        } else {
+          // clicked on segment [M, C] - P is between M and C on the arc
+          // arc 1 = (A, M, P), arc 2 = (P, X, C) - M stays
+          subStart = vertex;
+          subEnd = arcEnd;
+        }
+
+        // compute X as the angular midpoint of the sub-arc
+        let startAngle = Math.atan2(subStart[1] - cy, subStart[0] - cx);
+        let endAngle = Math.atan2(subEnd[1] - cy, subEnd[0] - cx);
+        if (startAngle < 0) {
+          startAngle += 2 * Math.PI;
+        }
+        if (endAngle < 0) {
+          endAngle += 2 * Math.PI;
+        }
+
+        let midAngle;
+        if (cw) {
+          let sweep =
+            ((startAngle - endAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (2 * Math.PI);
+          if (sweep === 0) {
+            sweep = 2 * Math.PI;
+          }
+          midAngle = startAngle - sweep / 2;
+        } else {
+          let sweep =
+            ((endAngle - startAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (2 * Math.PI);
+          if (sweep === 0) {
+            sweep = 2 * Math.PI;
+          }
+          midAngle = startAngle + sweep / 2;
+        }
+
+        const newMidpoint = [
+          cx + radius * Math.cos(midAngle),
+          cy + radius * Math.sin(midAngle),
+        ];
+        while (newMidpoint.length < geometry.getStride()) {
+          newMidpoint.push(0);
+        }
+
+        if (isFirstHalf) {
+          // insert [X, P] before M (at position arcIndex*2 + 1)
+          coordinates.splice(arcIndex * 2 + 1, 0, newMidpoint, vertex);
+        } else {
+          // insert [P, X] after M (at position arcIndex*2 + 2)
+          coordinates.splice(arcIndex * 2 + 2, 0, vertex, newMidpoint);
+        }
+
+        this.setGeometryCoordinates_(geometry, coordinates);
+
+        // update RBush: remove old segments for this arc and recreate
+        const rTree = this.rBush_;
+        const oldSegments = [];
+        rTree.forEachInExtent(geometry.getExtent(), function (sd) {
+          if (
+            sd.geometry === geometry &&
+            (sd.depth === undefined ||
+              depth === undefined ||
+              equals(sd.depth, depth)) &&
+            (sd.index === arcIndex * 2 || sd.index === arcIndex * 2 + 1)
+          ) {
+            oldSegments.push(sd);
+          }
+        });
+        // get the shared featureSegments array from one of the old segments
+        const featureSegments =
+          oldSegments.length > 0 && oldSegments[0].featureSegments
+            ? oldSegments[0].featureSegments
+            : [];
+        for (const sd of oldSegments) {
+          rTree.remove(sd);
+          // remove from featureSegments array
+          const idx = featureSegments.indexOf(sd);
+          if (idx !== -1) {
+            featureSegments.splice(idx, 1);
+          }
+        }
+
+        // shift indices for segments after the insertion point
+        this.updateSegmentIndices_(geometry, arcIndex * 2 + 1, depth, 2);
+
+        // create 4 new segments for the two new arcs
+        const newCoords = geometry.getCoordinates();
+        const baseIdx = arcIndex * 2;
+        const geomExtent = geometry.getExtent().slice();
+        for (let j = 0; j < newCoords.length; ++j) {
+          geomExtent[0] = Math.min(geomExtent[0], newCoords[j][0]);
+          geomExtent[1] = Math.min(geomExtent[1], newCoords[j][1]);
+          geomExtent[2] = Math.max(geomExtent[2], newCoords[j][0]);
+          geomExtent[3] = Math.max(geomExtent[3], newCoords[j][1]);
+        }
+        for (let k = 0; k < 4; ++k) {
+          const seg = [newCoords[baseIdx + k], newCoords[baseIdx + k + 1]];
+          /** @type {SegmentData} */
+          const sd = {
+            segment: seg,
+            feature: feature,
+            geometry: geometry,
+            depth: depth,
+            index: baseIdx + k,
+            featureSegments: featureSegments,
+          };
+          featureSegments.push(sd);
+          rTree.insert(geomExtent, sd);
+          // push the two segments adjacent to vertex as drag segments
+          if (k === 1 || k === 2) {
+            this.dragSegments_.push([sd, k === 1 ? 1 : 0]);
+          }
+        }
+        // Update extents on all other sibling segments
+        for (const sd of featureSegments) {
+          if (sd.index < baseIdx || sd.index >= baseIdx + 4) {
+            rTree.update(geomExtent, sd);
+          }
+        }
+        return true;
+      }
       default:
         return false;
     }
@@ -2121,6 +2419,12 @@ class Modify extends PointerInteraction {
           break;
         case 'LineString':
           if (coordinates.length > 2) {
+            coordinates.splice(index, 1);
+            deleted = true;
+          }
+          break;
+        case 'CircularString':
+          if (coordinates.length > 3) {
             coordinates.splice(index, 1);
             deleted = true;
           }
@@ -2378,6 +2682,19 @@ function projectedDistanceToSegmentDataSquared(
     }
   }
 
+  if (geometry.getType() === 'CircularString') {
+    const coordinate = fromUserCoordinate(pointCoordinates, projection);
+    const arcIndex = Math.floor(segmentData.index / 2);
+    const circGeom =
+      /** @type {import("../geom/CircularString.js").default} */ (geometry);
+    const closestPoint = circGeom.closestPointOnArc(
+      arcIndex,
+      coordinate[0],
+      coordinate[1],
+    );
+    return squaredCoordinateDistance(coordinate, closestPoint);
+  }
+
   const coordinate = fromUserCoordinate(pointCoordinates, projection);
   tempSegment[0] = fromUserCoordinate(segmentData.segment[0], projection);
   tempSegment[1] = fromUserCoordinate(segmentData.segment[1], projection);
@@ -2417,6 +2734,20 @@ function closestOnSegmentData(pointCoordinates, segmentData, projection) {
       projection,
     );
   }
+
+  if (geometry.getType() === 'CircularString') {
+    const coordinate = fromUserCoordinate(pointCoordinates, projection);
+    const arcIndex = Math.floor(segmentData.index / 2);
+    const circGeom =
+      /** @type {import("../geom/CircularString.js").default} */ (geometry);
+    const closestPoint = circGeom.closestPointOnArc(
+      arcIndex,
+      coordinate[0],
+      coordinate[1],
+    );
+    return toUserCoordinate(closestPoint, projection);
+  }
+
   const coordinate = fromUserCoordinate(pointCoordinates, projection);
   tempSegment[0] = fromUserCoordinate(segmentData.segment[0], projection);
   tempSegment[1] = fromUserCoordinate(segmentData.segment[1], projection);

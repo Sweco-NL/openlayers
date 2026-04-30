@@ -1,8 +1,8 @@
 import Feature from '../../../../src/ol/Feature.js';
 import WKT from '../../../../src/ol/format/WKT.js';
 import Point from '../../../../src/ol/geom/Point.js';
-import expect from '../../expect.js';
 import {transform} from '../../../../src/ol/proj.js';
+import expect from '../../expect.js';
 
 describe('ol/format/WKT.js', function () {
   let format = new WKT();
@@ -1195,6 +1195,25 @@ describe('ol/format/WKT.js', function () {
     ]);
   });
 
+  it('GeometryCollection with curve types read / written correctly', function () {
+    const wkt =
+      'GEOMETRYCOLLECTION(POINT(1 2),CIRCULARSTRING(0 0,1 1,2 0),COMPOUNDCURVE(CIRCULARSTRING(3 0,4 1,5 0),(5 0,6 0)))';
+    const geom = format.readGeometry(wkt);
+    const geoms = geom.getGeometries();
+    expect(geoms.length).to.eql(3);
+    expect(geom.getType()).to.eql('GeometryCollection');
+    expect(geoms[0].getType()).to.eql('Point');
+    expect(geoms[1].getType()).to.eql('CircularString');
+    expect(geoms[2].getType()).to.eql('CompoundCurve');
+    expect(geoms[0].getCoordinates()).to.eql([1, 2]);
+    expect(geoms[1].getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
   it('Empty GeometryCollection read / written correctly', function () {
     const wkt = 'GEOMETRYCOLLECTION EMPTY';
     const geom = format.readGeometry(wkt);
@@ -1203,7 +1222,7 @@ describe('ol/format/WKT.js', function () {
   });
 
   it('GeometryCollection split / merged correctly', function () {
-    format = new WKT({ splitCollection: true });
+    format = new WKT({splitCollection: true});
     const wkt = 'GEOMETRYCOLLECTION(POINT(4 6),LINESTRING(4 6,7 10))';
     const features = format.readFeatures(wkt);
     expect(features.length).to.eql(2);

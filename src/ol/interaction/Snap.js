@@ -230,6 +230,54 @@ const GEOMETRY_SEGMENTERS = {
   },
 
   /**
+   * @param {import("../geom/CircularString.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CircularString(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const coords = geometry.tessellate();
+    for (let i = 0, ii = coords.length - 2; i < ii; i += 2) {
+      segments.push([coords.slice(i, i + 2), coords.slice(i + 2, i + 4)]);
+    }
+    return segments;
+  },
+
+  /**
+   * @param {import("../geom/CompoundCurve.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CompoundCurve(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const geometries = geometry.getGeometriesArray();
+    for (let i = 0, ii = geometries.length; i < ii; ++i) {
+      const segmenter = this[geometries[i].getType()];
+      if (segmenter) {
+        segments.push(...segmenter.call(this, geometries[i]));
+      }
+    }
+    return segments;
+  },
+
+  /**
+   * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CurvePolygon(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const rings = geometry.getRingsArray();
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const segmenter = this[rings[i].getType()];
+      if (segmenter) {
+        segments.push(...segmenter.call(this, rings[i]));
+      }
+    }
+    return segments;
+  },
+
+  /**
    * @param {import("../geom/Polygon.js").default} geometry Geometry.
    * @return {Array<Segment>} Segments
    */
@@ -474,7 +522,7 @@ class Snap extends PointerInteraction {
               continue;
             }
             const extent = tempExtents[j];
-            // Calculate intersections with own segments excluding self and
+            // calculate intersections with own segments excluding self and
             // neighbors
             for (let k = 0, kk = j - 1; k < kk; ++k) {
               const otherSegment = segments[k];
@@ -496,7 +544,7 @@ class Snap extends PointerInteraction {
                 segment: intersectionSegment,
               };
             }
-            // Calculate intersections with existing segments
+            // calculate intersections with existing segments
             const otherSegments = this.rBush_.getInExtent(tempExtents[j]);
             for (let k = 0, kk = otherSegments.length; k < kk; ++k) {
               const otherSegment = otherSegments[k].segment;
@@ -582,7 +630,7 @@ class Snap extends PointerInteraction {
       evt.coordinate = result.vertex.slice(0, 2);
       evt.pixel = result.vertexPixel;
 
-      // Dispatch UNSNAP event if already snapped
+      // dispatch UNSNAP event if already snapped
       if (this.snapped_ && !this.areSnapDataEqual_(this.snapped_, result)) {
         this.dispatchEvent(new SnapEvent(SnapEventType.UNSNAP, this.snapped_));
       }
@@ -595,7 +643,7 @@ class Snap extends PointerInteraction {
       };
       this.dispatchEvent(new SnapEvent(SnapEventType.SNAP, this.snapped_));
     } else if (this.snapped_) {
-      // Dispatch UNSNAP event if no longer snapped
+      // dispatch UNSNAP event if no longer snapped
       this.dispatchEvent(new SnapEvent(SnapEventType.UNSNAP, this.snapped_));
       this.snapped_ = null;
     }

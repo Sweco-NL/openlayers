@@ -405,7 +405,13 @@ export function createRenderFeature(object, options) {
 
   const geometryType =
     geometry.type === 'MultiPolygon' ? 'Polygon' : geometry.type;
-  if (geometryType === 'GeometryCollection' || geometryType === 'Circle') {
+  if (
+    geometryType === 'GeometryCollection' ||
+    geometryType === 'Circle' ||
+    geometryType === 'CircularString' ||
+    geometryType === 'CompoundCurve' ||
+    geometryType === 'CurvePolygon'
+  ) {
     throw new Error('Unsupported geometry type: ' + geometryType);
   }
 

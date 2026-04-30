@@ -446,7 +446,9 @@ class WkbReader {
 
       case WKBGeometryType.CURVE_POLYGON:
         return new CurvePolygon(
-          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
+          /** @type {Array<import('../geom/CurvePolygon.js').CurveRing>} */ (
+            result
+          ),
           this.layout_
         );
 
@@ -703,6 +705,10 @@ class WkbWriter {
       return GeometryLayout_min(geom.getLayout(), layout);
     }
 
+    if (geom instanceof CompoundCurve || geom instanceof CurvePolygon) {
+      return GeometryLayout_min(geom.getLayout(), layout);
+    }
+
     if (geom instanceof GeometryCollection) {
       const geoms = geom.getGeometriesArray();
       for (let i = 0; i < geoms.length && layout !== 'XY'; i++) {
@@ -749,7 +755,11 @@ class WkbWriter {
 
     this.writeWkbHeader(typeId, srid);
 
-    if (geom instanceof SimpleGeometry) {
+    if (geom instanceof CompoundCurve) {
+      this.writeGeometryCollection(geom.getGeometriesArray());
+    } else if (geom instanceof CurvePolygon) {
+      this.writeGeometryCollection(geom.getRingsArray());
+    } else if (geom instanceof SimpleGeometry) {
       const writerLUT = {
         Point: this.writePoint,
         LineString: this.writeLineString,
@@ -758,16 +768,8 @@ class WkbWriter {
         MultiLineString: this.writeMultiLineString,
         MultiPolygon: this.writeMultiPolygon,
         CircularString: this.writeCircularString,
-        CompoundCurve: this.writeCompoundCurve,
-        CurvePolygon: this.writeCurvePolygon,
       };
-      if (geom instanceof CompoundCurve) {
-        this.writeGeometryCollection(geom.getGeometries());
-      } else if (geom instanceof CurvePolygon) {
-        this.writeGeometryCollection(geom.getRings());
-      } else {
-        writerLUT[geomType].call(this, geom.getCoordinates(), geom.getLayout());
-      }
+      writerLUT[geomType].call(this, geom.getCoordinates(), geom.getLayout());
     } else if (geom instanceof GeometryCollection) {
       this.writeGeometryCollection(geom.getGeometriesArray());
     }
