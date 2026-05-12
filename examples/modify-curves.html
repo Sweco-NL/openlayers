@@ -1,0 +1,17 @@
+---
+layout: example.html
+title: Modify Curves
+shortdesc: Editing curved geometries (CircularString, CompoundCurve, CurvePolygon).
+docs: >
+  Demonstrates modifying curve geometries with the Modify interaction.
+  Drag control points to reshape arcs and curves. Click on an arc edge
+  to insert a new vertex (arc-splitting). The WKT output updates in real
+  time. Vertex deletion works with <code>Alt+Click</code> on control
+  points (minimum 3 required for an arc).
+tags: "modify, edit, vector, curve, circularstring, compoundcurve, curvepolygon"
+---
+<div id="map" class="map"></div>
+<div>
+  <label>WKT output:</label>
+  <textarea id="wkt" rows="4" style="width:100%"></textarea>
+</div>

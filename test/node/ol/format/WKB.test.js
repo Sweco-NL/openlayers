@@ -1,12 +1,12 @@
 import Feature from '../../../../src/ol/Feature.js';
 import WKB from '../../../../src/ol/format/WKB.js';
 import WKT from '../../../../src/ol/format/WKT.js';
+import CompoundCurve from '../../../../src/ol/geom/CompoundCurve.js';
+import CurvePolygon from '../../../../src/ol/geom/CurvePolygon.js';
 import GeometryCollection from '../../../../src/ol/geom/GeometryCollection.js';
 import Point from '../../../../src/ol/geom/Point.js';
 import SimpleGeometry from '../../../../src/ol/geom/SimpleGeometry.js';
 import {transform} from '../../../../src/ol/proj.js';
-import CompoundCurve from '../../../../src/ol/geom/CompoundCurve.js';
-import CurvePolygon from '../../../../src/ol/geom/CurvePolygon.js';
 import expect from '../../expect.js';
 
 const patterns = [
@@ -78,6 +78,16 @@ const patterns = [
   [
     '0000000007000000030000000001402400000000000040240000000000000000000001403e000000000000403e000000000000000000000200000002402e000000000000402e00000000000040340000000000004034000000000000',
     'GEOMETRYCOLLECTION(POINT(10 10),POINT(30 30),LINESTRING(15 15,20 20))',
+    {littleEndian: false, ewkb: false, geometryLayout: 'XY'},
+  ],
+  [
+    '0107000000030000000101000000000000000000f03f000000000000004001080000000300000000000000000000000000000000000000000000000000f03f000000000000f03f00000000000000400000000000000000010900000002000000010800000003000000000000000000084000000000000000000000000000001040000000000000f03f000000000000144000000000000000000102000000020000000000000000001440000000000000000000000000000018400000000000000000',
+    'GEOMETRYCOLLECTION(POINT(1 2),CIRCULARSTRING(0 0,1 1,2 0),COMPOUNDCURVE(CIRCULARSTRING(3 0,4 1,5 0),(5 0,6 0)))',
+    {littleEndian: true, ewkb: false, geometryLayout: 'XY'},
+  ],
+  [
+    '00000000070000000300000000013ff00000000000004000000000000000000000000800000003000000000000000000000000000000003ff00000000000003ff0000000000000400000000000000000000000000000000000000009000000020000000008000000034008000000000000000000000000000040100000000000003ff0000000000000401400000000000000000000000000000000000002000000024014000000000000000000000000000040180000000000000000000000000000',
+    'GEOMETRYCOLLECTION(POINT(1 2),CIRCULARSTRING(0 0,1 1,2 0),COMPOUNDCURVE(CIRCULARSTRING(3 0,4 1,5 0),(5 0,6 0)))',
     {littleEndian: false, ewkb: false, geometryLayout: 'XY'},
   ],
   [
@@ -1375,7 +1385,7 @@ const patterns = [
     '00c000000a00000000',
     'CURVEPOLYGON ZM EMPTY',
     {littleEndian: false, ewkb: true, geometryLayout: 'XYZM'},
-  ]
+  ],
 ];
 
 describe('ol/format/WKB.js', function () {
@@ -1477,12 +1487,18 @@ describe('ol/format/WKB.js', function () {
     function compareGeometries(a, b) {
       expect(a.getType()).to.eql(b.getType());
 
-      if (a instanceof GeometryCollection ||
-          b instanceof GeometryCollection || 
-          a instanceof CompoundCurve || 
-          b instanceof CompoundCurve) {
-            expect(a instanceof GeometryCollection || a instanceof CompoundCurve).to.be(true);
-            expect(b instanceof GeometryCollection || a instanceof CompoundCurve).to.be(true);
+      if (
+        a instanceof GeometryCollection ||
+        b instanceof GeometryCollection ||
+        a instanceof CompoundCurve ||
+        b instanceof CompoundCurve
+      ) {
+        expect(
+          a instanceof GeometryCollection || a instanceof CompoundCurve,
+        ).to.be(true);
+        expect(
+          b instanceof GeometryCollection || a instanceof CompoundCurve,
+        ).to.be(true);
 
         const aGeoms = a.getGeometries();
         const bGeoms = b.getGeometries();

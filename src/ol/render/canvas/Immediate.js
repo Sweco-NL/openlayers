@@ -499,6 +499,94 @@ class CanvasImmediateRenderer extends VectorContext {
   }
 
   /**
+   * Render a CurvePolygon using tessellated coordinates.
+   * @param {import("../../geom/CurvePolygon.js").default} geometry CurvePolygon geometry.
+   * @private
+   */
+  drawCurvePolygon_(geometry) {
+    if (!intersects(this.extent_, geometry.getExtent())) {
+      return;
+    }
+    if (this.strokeState_ || this.fillState_) {
+      if (this.fillState_) {
+        this.setContextFillState_(this.fillState_);
+      }
+      if (this.strokeState_) {
+        this.setContextStrokeState_(this.strokeState_);
+      }
+      const context = this.context_;
+      context.beginPath();
+      const flatCoordinates = geometry.getOrientedFlatCoordinates();
+      const ends = geometry.getTessellatedEnds();
+      this.drawRings_(
+        flatCoordinates,
+        0,
+        /** @type {Array<number>} */ (ends),
+        2,
+        this.strokeState_?.strokeOffset,
+      );
+      if (this.fillState_) {
+        context.fill();
+      }
+      if (this.strokeState_) {
+        context.stroke();
+      }
+    }
+  }
+
+  /**
+   * Render a CircularString using tessellated coordinates.
+   * @param {import("../../geom/CircularString.js").default} geometry CircularString geometry.
+   * @private
+   */
+  drawCircularString_(geometry) {
+    if (!intersects(this.extent_, geometry.getExtent())) {
+      return;
+    }
+    if (this.strokeState_) {
+      this.setContextStrokeState_(this.strokeState_);
+      const context = this.context_;
+      const flatCoordinates = geometry.tessellate();
+      context.beginPath();
+      this.moveToLineTo_(
+        flatCoordinates,
+        0,
+        flatCoordinates.length,
+        2,
+        false,
+        this.strokeState_.strokeOffset,
+      );
+      context.stroke();
+    }
+  }
+
+  /**
+   * Render a CompoundCurve using tessellated coordinates.
+   * @param {import("../../geom/CompoundCurve.js").default} geometry CompoundCurve geometry.
+   * @private
+   */
+  drawCompoundCurve_(geometry) {
+    if (!intersects(this.extent_, geometry.getExtent())) {
+      return;
+    }
+    if (this.strokeState_) {
+      this.setContextStrokeState_(this.strokeState_);
+      const context = this.context_;
+      const flatCoordinates = geometry.tessellate();
+      context.beginPath();
+      this.moveToLineTo_(
+        flatCoordinates,
+        0,
+        flatCoordinates.length,
+        2,
+        false,
+        this.strokeState_.strokeOffset,
+      );
+      context.stroke();
+    }
+  }
+
+  /**
    * Render a circle geometry into the canvas.  Rendering is immediate and uses
    * the current fill and stroke styles.
    *
@@ -630,6 +718,27 @@ class CanvasImmediateRenderer extends VectorContext {
       case 'Circle':
         this.drawCircle(
           /** @type {import("../../geom/Circle.js").default} */ (geometry),
+        );
+        break;
+      case 'CurvePolygon':
+        this.drawCurvePolygon_(
+          /** @type {import("../../geom/CurvePolygon.js").default} */ (
+            geometry
+          ),
+        );
+        break;
+      case 'CircularString':
+        this.drawCircularString_(
+          /** @type {import("../../geom/CircularString.js").default} */ (
+            geometry
+          ),
+        );
+        break;
+      case 'CompoundCurve':
+        this.drawCompoundCurve_(
+          /** @type {import("../../geom/CompoundCurve.js").default} */ (
+            geometry
+          ),
         );
         break;
       default:

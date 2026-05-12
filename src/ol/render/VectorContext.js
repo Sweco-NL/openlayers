@@ -119,7 +119,7 @@ class VectorContext {
   drawPolygon(polygonGeometry, feature, index) {}
 
   /**
-   * @param {import("../geom/SimpleGeometry.js").default|import("./Feature.js").default} geometry Geometry.
+   * @param {import("../geom/SimpleGeometry.js").default|import("../geom/CompoundCurve.js").default|import("../geom/CurvePolygon.js").default|import("./Feature.js").default} geometry Geometry.
    * @param {import("../Feature.js").FeatureLike} feature Feature.
    * @param {number} [index] Render order index.
    */

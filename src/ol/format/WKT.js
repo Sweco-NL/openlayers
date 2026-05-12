@@ -540,7 +540,9 @@ class Parser {
       this.consume_();
 
       const parentLayout = this.layout_;
-      this.layout_ = this.parseGeometryLayout_();
+      const subLayout = this.parseGeometryLayout_();
+      // if the sub-geometry has no explicit layout marker, inherit from the parent
+      this.layout_ = subLayout !== 'XY' ? subLayout : parentLayout;
 
       let coordinates;
       if (geomType === 'CIRCULARSTRING') {
@@ -555,7 +557,7 @@ class Parser {
       }
 
       const ctor = GeometryConstructor[geomType];
-      const geometry = new ctor(coordinates);
+      const geometry = new ctor(coordinates, this.layout_);
 
       this.layout_ = parentLayout;
       return geometry;
@@ -563,7 +565,7 @@ class Parser {
 
     if (this.isTokenType(TokenType.LEFT_PAREN)) {
       const coordinates = this.parseLineStringText_();
-      return new LineString(coordinates);
+      return new LineString(coordinates, this.layout_);
     }
 
     throw new Error(this.formatErrorMessage_());
@@ -583,26 +585,27 @@ class Parser {
           this.consume_();
 
           const parentLayout = this.layout_;
-          this.layout_ = this.parseGeometryLayout_();
+          const subLayout = this.parseGeometryLayout_();
+          // if the ring has no explicit layout marker, inherit from the parent
+          this.layout_ = subLayout !== 'XY' ? subLayout : parentLayout;
 
           let ring;
           if (geomType == 'COMPOUNDCURVE') {
             const subGeometries = this.parseCompoundCurveText_();
-            // Corrected: Pass layout to CompoundCurve constructor
-            ring = new CompoundCurve(subGeometries);
+            ring = new CompoundCurve(subGeometries, this.layout_);
           } else if (geomType == 'CIRCULARSTRING') {
             const coordinates = this.parseCircularStringText_();
-            ring = new CircularString(coordinates);
+            ring = new CircularString(coordinates, this.layout_);
           } else {
-            // Assumed LINESTRING if text is present
+            // assumed LINESTRING if text is present
             const coordinates = this.parseLineStringText_();
-            ring = new LineString(coordinates);
+            ring = new LineString(coordinates, this.layout_);
           }
           rings.push(ring);
           this.layout_ = parentLayout;
         } else if (this.isTokenType(TokenType.LEFT_PAREN)) {
           const coordinates = this.parseLineStringText_();
-          rings.push(new LineString(coordinates));
+          rings.push(new LineString(coordinates, this.layout_));
         } else {
           throw new Error(this.formatErrorMessage_());
         }
@@ -883,7 +886,7 @@ function encodeMultiPointGeometry(geom) {
  */
 function encodeGeometryCollectionGeometry(geom) {
   const array = [];
-  const geoms = geom.getGeometries();
+  const geoms = geom.getGeometriesArray();
   for (let i = 0, ii = geoms.length; i < ii; ++i) {
     array.push(encode(geoms[i]));
   }
@@ -976,7 +979,6 @@ function encodeCompoundCurveGeometry(geom) {
       case 'CircularString':
         encodedComponent =
           'CIRCULARSTRING' +
-          encodeGeometryLayout(component) +
           '(' +
           encodeCircularStringGeometry(
             /** @type {CircularString} */ (component),
@@ -997,7 +999,7 @@ function encodeCompoundCurveGeometry(geom) {
  */
 function encodeCurvePolygonGeometry(geom) {
   const array = [];
-  const rings = geom.getRings();
+  const rings = geom.getRingsArray();
   for (let i = 0, ii = rings.length; i < ii; ++i) {
     const ring = rings[i];
     const type = ring.getType();
@@ -1010,7 +1012,6 @@ function encodeCurvePolygonGeometry(geom) {
       case 'CircularString':
         encodedRing =
           'CIRCULARSTRING' +
-          encodeGeometryLayout(ring) +
           '(' +
           encodeCircularStringGeometry(/** @type {CircularString} */ (ring)) +
           ')';
@@ -1018,9 +1019,8 @@ function encodeCurvePolygonGeometry(geom) {
       case 'CompoundCurve':
         encodedRing =
           'COMPOUNDCURVE' +
-          encodeGeometryLayout(ring) +
           '(' +
-          encodeCompoundCurveGeometry(/** @type {CompoundCurve} */ (ring)) +
+          encodeCompoundCurveGeometry(/** @type {*} */ (ring)) +
           ')';
         break;
       default:
@@ -1042,7 +1042,7 @@ function encodeGeometryLayout(geom) {
     dimInfo += ' ' + Z;
   }
   if (layout === 'XYM' || layout === 'XYZM') {
-    dimInfo += M;
+    dimInfo += dimInfo ? M : ' ' + M;
   }
   return dimInfo;
 }
@@ -1077,7 +1077,7 @@ function encode(geom) {
   }
   const enc = geometryEncoder(geom);
   let wktType = wktTypeLookup[type];
-  if (typeof /** @type {?} */ (geom).getFlatCoordinates === 'function') {
+  if (typeof (/** @type {?} */ (geom).getLayout) === 'function') {
     const dimInfo = encodeGeometryLayout(
       /** @type {import("../geom/SimpleGeometry.js").default} */ (geom),
     );
