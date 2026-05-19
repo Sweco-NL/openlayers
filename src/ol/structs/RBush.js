@@ -98,6 +98,15 @@ class RBush {
   }
 
   /**
+   * Check if a value exists in the RBush.
+   * @param {T} value Value.
+   * @return {boolean} Whether the value is in the RBush.
+   */
+  has(value) {
+    return getUid(value) in this.items_;
+  }
+
+  /**
    * Update the extent of a value in the RBush.
    * @param {import("../extent.js").Extent} extent Extent.
    * @param {T} value Value.

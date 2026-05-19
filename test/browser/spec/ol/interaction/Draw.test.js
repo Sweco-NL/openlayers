@@ -1175,6 +1175,66 @@ describe('ol/interaction/Draw', function () {
     });
   });
 
+  describe('trace events', function () {
+    let draw;
+
+    beforeEach(function () {
+      draw = new Draw({
+        source: source,
+        type: 'Polygon',
+        trace: true,
+      });
+      map.addInteraction(draw);
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+      ]);
+    });
+
+    it('dispatches tracestart and traceend events', function () {
+      const events = [];
+      draw.on('tracestart', function (e) {
+        events.push({type: 'tracestart', coordinate: e.coordinate});
+      });
+      draw.on('traceend', function (e) {
+        events.push({type: 'traceend', coordinate: e.coordinate});
+      });
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      draw.shouldHandle_ = false;
+
+      // second click activates tracing (edge click)
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerup', 50, 50);
+      draw.shouldHandle_ = false;
+
+      expect(events.length).to.be(1);
+      expect(events[0].type).to.be('tracestart');
+
+      // third click ends tracing
+      simulateEvent('pointermove', 75, 100);
+      simulateEvent('pointerdown', 75, 100);
+      simulateEvent('pointerup', 75, 100);
+      draw.shouldHandle_ = false;
+
+      expect(events.length).to.be(2);
+      expect(events[1].type).to.be('traceend');
+    });
+  });
+
   describe('drawing multi-polygons', function () {
     let draw;
 

@@ -318,6 +318,86 @@ export class CircularArc {
   }
 
   /**
+   * Splits this arc at the given angle into two sub-arcs.
+   * Returns an array `[before, after]` where `before` is the arc from
+   * `begin` to the split point and `after` is the arc from the split point
+   * to `end`. If the split angle coincides with the start or end of the arc,
+   * the corresponding element is `null`.
+   * @param {number} angle The split angle in radians (0–2π).
+   * @param {Vector2} [center] The center of the circle, if already known.
+   * @return {Array<CircularArc|null>} The two sub-arcs `[before, after]`.
+   */
+  splitAtAngle(angle, center) {
+    const c = center || this.centerOfCircle();
+    if (!c) {
+      // degenerate (collinear) arc — cannot split by angle
+      return [this, null];
+    }
+    const radius = this.radius(c);
+    const angles = this.angles(c);
+    const cw = this.clockwise();
+    const TWO_PI = 2 * Math.PI;
+
+    // Normalize the split angle to 0–2π
+    let splitAngle = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+
+    // Check if split coincides with start or end
+    const startAngle = angles.startAngle;
+    const endAngle = angles.endAngle;
+
+    const dStart = Math.abs(this.angleDistance(splitAngle, startAngle));
+    const dEnd = Math.abs(this.angleDistance(splitAngle, endAngle));
+    if (dStart < EPSILON || Math.abs(dStart - TWO_PI) < EPSILON) {
+      return [null, this];
+    }
+    if (dEnd < EPSILON || Math.abs(dEnd - TWO_PI) < EPSILON) {
+      return [this, null];
+    }
+
+    // Compute the split point on the circle
+    const splitPoint = new Vector2(
+      c.x + radius * Math.cos(splitAngle),
+      c.y + radius * Math.sin(splitAngle),
+    );
+
+    // Compute midpoint angles for each sub-arc.
+    // For CCW: sweep = angleDistance(start, end) (positive, going CCW).
+    // For CW: we go from start to end in the CW direction.
+    let midAngle1, midAngle2;
+    if (cw) {
+      // CW arc: start → split → end (all going clockwise = decreasing angle)
+      // sweep1 = CW distance from start to split
+      const sweep1 = this.angleDistance(splitAngle, startAngle);
+      midAngle1 = startAngle - sweep1 / 2;
+      // sweep2 = CW distance from split to end
+      const sweep2 = this.angleDistance(endAngle, splitAngle);
+      midAngle2 = splitAngle - sweep2 / 2;
+    } else {
+      // CCW arc: start → split → end (all going counter-clockwise)
+      // sweep1 = CCW distance from start to split
+      const sweep1 = this.angleDistance(startAngle, splitAngle);
+      midAngle1 = startAngle + sweep1 / 2;
+      // sweep2 = CCW distance from split to end
+      const sweep2 = this.angleDistance(splitAngle, endAngle);
+      midAngle2 = splitAngle + sweep2 / 2;
+    }
+
+    const midPoint1 = new Vector2(
+      c.x + radius * Math.cos(midAngle1),
+      c.y + radius * Math.sin(midAngle1),
+    );
+    const midPoint2 = new Vector2(
+      c.x + radius * Math.cos(midAngle2),
+      c.y + radius * Math.sin(midAngle2),
+    );
+
+    return [
+      new CircularArc(this.begin, midPoint1, splitPoint),
+      new CircularArc(splitPoint, midPoint2, this.end),
+    ];
+  }
+
+  /**
    * Computes and returns the center of the circle.
    * @return {Vector2|null} The center of the circle, or null if points are
    *     collinear or coincident.
@@ -357,4 +437,90 @@ export class CircularArc {
 
     return perpendicularL1.intersection(perpendicularL2);
   }
+
+  /**
+   * Check if a point is near either endpoint of this arc.
+   * Uses squared distance to avoid sqrt.
+   * @param {Vector2} pt The point to test.
+   * @param {number} epsilonSq Squared distance threshold.
+   * @return {boolean} True if pt is within epsilon of begin or end.
+   */
+  isNearEndpoint(pt, epsilonSq) {
+    const d1x = pt.x - this.begin.x;
+    const d1y = pt.y - this.begin.y;
+    if (d1x * d1x + d1y * d1y < epsilonSq) {
+      return true;
+    }
+    const d2x = pt.x - this.end.x;
+    const d2y = pt.y - this.end.y;
+    return d2x * d2x + d2y * d2y < epsilonSq;
+  }
+
+  /**
+   * Test whether an angle lies within this arc's angular sweep.
+   * @param {number} angle The angle to test (radians).
+   * @param {Vector2} center The arc's center of circle.
+   * @return {boolean} True if the angle is within the arc's sweep.
+   */
+  containsAngle(angle, center) {
+    const angles = this.angles(center);
+    const cw = this.clockwise();
+    const TWO_PI = 2 * Math.PI;
+
+    const a = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+
+    const start = !cw ? angles.startAngle : angles.endAngle;
+    const end = !cw ? angles.endAngle : angles.startAngle;
+    let sweep = this.angleDistance(start, end);
+
+    const startToMiddle = this.angleDistance(start, angles.middleAngle);
+    if (startToMiddle > sweep) {
+      sweep = TWO_PI - sweep;
+    }
+
+    const startToAngle = this.angleDistance(start, a);
+    return startToAngle <= sweep + 1e-7;
+  }
+
+  /**
+   * Check if another arc represents the same arc (shared boundary).
+   * Two arcs are considered the same if they share a midpoint and have
+   * matching endpoints (in either direction).
+   * @param {CircularArc} other The other arc.
+   * @return {boolean} True if they represent the same arc.
+   */
+  isSameArc(other) {
+    if (!this.middle.equals(other.middle)) {
+      return false;
+    }
+    if (this.begin.equals(other.begin) && this.end.equals(other.end)) {
+      return true;
+    }
+    if (this.begin.equals(other.end) && this.end.equals(other.begin)) {
+      return true;
+    }
+    const beginMatches =
+      this.begin.equals(other.begin) || this.begin.equals(other.end);
+    const endMatches =
+      this.end.equals(other.end) || this.end.equals(other.begin);
+    return beginMatches || endMatches;
+  }
+}
+
+/**
+ * Create degenerate CircularArc objects from coordinate pairs.
+ * Each consecutive pair of coordinates becomes an arc where the midpoint
+ * is the geometric center of the segment.
+ * @param {Array<Array<number>>} coords Array of [x, y] coordinates.
+ * @return {Array<CircularArc>} Array of degenerate arcs.
+ */
+export function lineStringToDegenerateArcs(coords) {
+  const arcs = [];
+  for (let i = 0; i < coords.length - 1; i++) {
+    const begin = new Vector2(coords[i][0], coords[i][1]);
+    const end = new Vector2(coords[i + 1][0], coords[i + 1][1]);
+    const mid = new Vector2((begin.x + end.x) / 2, (begin.y + end.y) / 2);
+    arcs.push(new CircularArc(begin, mid, end));
+  }
+  return arcs;
 }

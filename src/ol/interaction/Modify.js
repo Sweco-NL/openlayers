@@ -41,7 +41,10 @@ import {
 import VectorSource from '../source/Vector.js';
 import VectorEventType from '../source/VectorEventType.js';
 import RBush from '../structs/RBush.js';
-import {createEditingStyle} from '../style/Style.js';
+import CircleStyle from '../style/Circle.js';
+import Fill from '../style/Fill.js';
+import Stroke from '../style/Stroke.js';
+import Style, {createEditingStyle} from '../style/Style.js';
 import {getUid} from '../util.js';
 import PointerInteraction from './Pointer.js';
 import {
@@ -49,6 +52,11 @@ import {
   getTraceTargetUpdate,
   getTraceTargets,
 } from './tracing.js';
+import {
+  getArcBoundingCoords,
+  getCircleCenter,
+  isArcClockwise,
+} from '../geom/flat/arc.js';
 
 /**
  * The segment index assigned to a circle's center when
@@ -377,6 +385,18 @@ class Modify extends PointerInteraction {
      * @private
      */
     this.snappedToVertex_ = false;
+
+    /**
+     * @type {SegmentData|null}
+     * @private
+     */
+    this.lastNode_ = null;
+
+    /**
+     * @type {boolean}
+     * @private
+     */
+    this.lastSnappedToSecond_ = false;
 
     /**
      * Indicate whether the interaction is currently changing a feature's
@@ -1028,33 +1048,70 @@ class Modify extends PointerInteraction {
    */
   writeCircularStringGeometry_(feature, geometry) {
     const coordinates = geometry.getCoordinates();
-    // start from the geometry extent (covers the full arc curve) then
-    // expand to explicitly include every control point coordinate.
-    // this is necessary because geometry.getExtent() computes axis
-    // extremes via center+radius which can miss a control point by
-    // floating-point epsilon (e.g. maxY=2.9999999999999996 instead of
-    // 3.0), causing the RBush point query for that control point to fail.
-    const extent = geometry.getExtent().slice();
-    for (let j = 0; j < coordinates.length; ++j) {
-      extent[0] = Math.min(extent[0], coordinates[j][0]);
-      extent[1] = Math.min(extent[1], coordinates[j][1]);
-      extent[2] = Math.max(extent[2], coordinates[j][0]);
-      extent[3] = Math.max(extent[3], coordinates[j][1]);
-    }
     /** @type {Array<SegmentData>} */
     const featureSegments = [];
-    for (let i = 0, ii = coordinates.length - 1; i < ii; ++i) {
-      const segment = coordinates.slice(i, i + 2);
-      /** @type {SegmentData} */
-      const segmentData = {
-        feature: feature,
-        geometry: geometry,
-        index: i,
-        segment: segment,
-        featureSegments: featureSegments,
-      };
-      featureSegments.push(segmentData);
-      this.rBush_.insert(extent, segmentData);
+    for (let i = 0, ii = coordinates.length - 1; i < ii; i += 2) {
+      // Compute per-arc extent (tight bounding box for each arc)
+      const arcIdx = i; // start coordinate index of this arc
+      const bx = coordinates[arcIdx][0],
+        by = coordinates[arcIdx][1];
+      const mx = coordinates[arcIdx + 1][0],
+        my = coordinates[arcIdx + 1][1];
+      const ex = coordinates[Math.min(arcIdx + 2, ii)][0],
+        ey = coordinates[Math.min(arcIdx + 2, ii)][1];
+      const center = getCircleCenter(bx, by, mx, my, ex, ey);
+      let arcExtent;
+      if (center) {
+        const boundingCoords = getArcBoundingCoords(
+          bx,
+          by,
+          mx,
+          my,
+          ex,
+          ey,
+          center[0],
+          center[1],
+        );
+        let minX = Infinity,
+          minY = Infinity,
+          maxX = -Infinity,
+          maxY = -Infinity;
+        for (let k = 0; k < boundingCoords.length; k += 2) {
+          minX = Math.min(minX, boundingCoords[k]);
+          minY = Math.min(minY, boundingCoords[k + 1]);
+          maxX = Math.max(maxX, boundingCoords[k]);
+          maxY = Math.max(maxY, boundingCoords[k + 1]);
+        }
+        // Explicitly include control points to avoid FP epsilon misses
+        minX = Math.min(minX, bx, mx, ex);
+        minY = Math.min(minY, by, my, ey);
+        maxX = Math.max(maxX, bx, mx, ex);
+        maxY = Math.max(maxY, by, my, ey);
+        arcExtent = [minX, minY, maxX, maxY];
+      } else {
+        // Degenerate (collinear) arc: extent from control points
+        arcExtent = [
+          Math.min(bx, mx, ex),
+          Math.min(by, my, ey),
+          Math.max(bx, mx, ex),
+          Math.max(by, my, ey),
+        ];
+      }
+
+      // Create two segments for this arc (first half and second half)
+      for (let j = 0; j < 2 && arcIdx + j < ii; ++j) {
+        const segment = coordinates.slice(arcIdx + j, arcIdx + j + 2);
+        /** @type {SegmentData} */
+        const segmentData = {
+          feature: feature,
+          geometry: geometry,
+          index: arcIdx + j,
+          segment: segment,
+          featureSegments: featureSegments,
+        };
+        featureSegments.push(segmentData);
+        this.rBush_.insert(arcExtent, segmentData);
+      }
     }
   }
 
@@ -1111,6 +1168,21 @@ class Modify extends PointerInteraction {
     vertexFeature.set('features', features);
     vertexFeature.set('geometries', geometries);
     vertexFeature.set('existing', existing);
+
+    // Detect midpoint: for CircularString segments, odd-indexed control
+    // points are arc midpoints and should be visually distinguished.
+    let isMidpoint = false;
+    if (existing && this.lastNode_) {
+      const node = this.lastNode_;
+      if (node.geometry && node.geometry.getType() === 'CircularString') {
+        const snappedIdx = this.lastSnappedToSecond_
+          ? node.index + 1
+          : node.index;
+        isMidpoint = snappedIdx % 2 === 1;
+      }
+    }
+    vertexFeature.set('midpoint', isMidpoint);
+
     return vertexFeature;
   }
 
@@ -1756,10 +1828,12 @@ class Modify extends PointerInteraction {
       this.findInsertVerticesAndUpdateDragSegments_(pixelCoordinate);
 
     if (insertVertices?.length && this.insertVertexCondition_(evt)) {
+      const vertex = this.vertexFeature_
+        ? this.vertexFeature_.getGeometry().getCoordinates()
+        : null;
       this.willModifyFeatures_(evt, insertVertices);
 
       if (this.vertexFeature_) {
-        const vertex = this.vertexFeature_.getGeometry().getCoordinates();
         for (let j = insertVertices.length - 1; j >= 0; --j) {
           this.insertVertex_(insertVertices[j], vertex);
         }
@@ -1824,9 +1898,11 @@ class Modify extends PointerInteraction {
         // full geometry extent that all segments share.
         if (segmentData.featureSegments) {
           for (const sd of segmentData.featureSegments) {
-            this.rBush_.update(csExtent, sd);
+            if (this.rBush_.has(sd)) {
+              this.rBush_.update(csExtent, sd);
+            }
           }
-        } else {
+        } else if (this.rBush_.has(segmentData)) {
           this.rBush_.update(csExtent, segmentData);
         }
       } else {
@@ -1852,7 +1928,13 @@ class Modify extends PointerInteraction {
    * @private
    */
   handlePointerMove_(evt) {
-    this.lastCoordinate_ = evt.coordinate;
+    // Use the original pointer coordinate (from the browser event pixel)
+    // rather than evt.coordinate, which may have been modified by a Snap
+    // interaction earlier in the event chain. This ensures the vertex
+    // indicator appears at the actual pointer position.
+    const map = evt.map;
+    const originalPixel = map.getEventPixel(evt.originalEvent);
+    this.lastCoordinate_ = map.getCoordinateFromPixel(originalPixel);
     this.handlePointerAtPixel_(this.lastCoordinate_);
   }
 
@@ -1928,11 +2010,53 @@ class Modify extends PointerInteraction {
 
     if (nodes && nodes.length > 0) {
       const node = nodes.sort(sortByDistance)[0];
-      const closestSegment = node.segment;
-      let vertex = closestOnSegmentData(pixelCoordinate, node, projection);
+
+      // For CircularString, scan all candidate nodes to find the closest
+      // control-point endpoint to the cursor. A curved arc's nearest-on-curve
+      // point can mislead the primary sort, so we check endpoints directly.
+      let bestEndpointNode = null;
+      let bestEndpointIsSecond = false;
+      let bestEndpointDist = Infinity;
+      for (let i = 0, ii = nodes.length; i < ii; ++i) {
+        const n = nodes[i];
+        if (n.geometry.getType() !== 'CircularString') {
+          continue;
+        }
+        const ep1Pixel = map.getPixelFromCoordinate(n.segment[0]);
+        const ep2Pixel = map.getPixelFromCoordinate(n.segment[1]);
+        const d1 = Math.sqrt(squaredCoordinateDistance(pixel, ep1Pixel));
+        const d2 = Math.sqrt(squaredCoordinateDistance(pixel, ep2Pixel));
+        if (d1 < bestEndpointDist) {
+          bestEndpointDist = d1;
+          bestEndpointNode = n;
+          bestEndpointIsSecond = false;
+        }
+        if (d2 < bestEndpointDist) {
+          bestEndpointDist = d2;
+          bestEndpointNode = n;
+          bestEndpointIsSecond = true;
+        }
+      }
+      // If a control point endpoint is within boosted tolerance, use that
+      // node and override the closest-arc selection.
+      const useEndpointNode =
+        bestEndpointNode &&
+        bestEndpointDist <= this.pixelTolerance_ * 3;
+
+      const effectiveNode = useEndpointNode ? bestEndpointNode : node;
+      const closestSegment = effectiveNode.segment;
+      let vertex;
+      if (useEndpointNode) {
+        // Jump directly to the control point endpoint
+        vertex = bestEndpointIsSecond ? closestSegment[1] : closestSegment[0];
+      } else {
+        vertex = closestOnSegmentData(pixelCoordinate, effectiveNode, projection);
+      }
       const vertexPixel = map.getPixelFromCoordinate(vertex);
-      let dist = coordinateDistance(pixel, vertexPixel);
-      if (hitPointGeometry || dist <= this.pixelTolerance_) {
+      let dist = useEndpointNode
+        ? bestEndpointDist
+        : coordinateDistance(pixel, vertexPixel);
+      if (hitPointGeometry || dist <= this.pixelTolerance_ * (useEndpointNode ? 3 : 1)) {
         /** @type {Object<string, boolean>} */
         const vertexSegments = {};
         vertexSegments[getUid(closestSegment)] = true;
@@ -1942,14 +2066,14 @@ class Modify extends PointerInteraction {
           this.delta_[1] = vertex[1] - pixelCoordinate[1];
         }
         if (
-          node.geometry.getType() === 'Circle' &&
-          node.index === CIRCLE_CIRCUMFERENCE_INDEX
+          effectiveNode.geometry.getType() === 'Circle' &&
+          effectiveNode.index === CIRCLE_CIRCUMFERENCE_INDEX
         ) {
           this.snappedToVertex_ = true;
           this.createOrUpdateVertexFeature_(
             vertex,
-            [node.feature],
-            [node.geometry],
+            [effectiveNode.feature],
+            [effectiveNode.geometry],
             this.snappedToVertex_,
           );
         } else {
@@ -1958,7 +2082,25 @@ class Modify extends PointerInteraction {
           const squaredDist1 = squaredCoordinateDistance(vertexPixel, pixel1);
           const squaredDist2 = squaredCoordinateDistance(vertexPixel, pixel2);
           dist = Math.sqrt(Math.min(squaredDist1, squaredDist2));
-          this.snappedToVertex_ = dist <= this.pixelTolerance_;
+          const isCircularString =
+            effectiveNode.geometry.getType() === 'CircularString';
+          // For CircularString, check cursor-to-endpoint distance directly
+          // (not closest-on-arc-to-endpoint) because a curved arc's closest
+          // point can be far from an endpoint even when the cursor is near it.
+          let snappedToFirst;
+          if (isCircularString) {
+            const cursorSqDist1 = squaredCoordinateDistance(pixel, pixel1);
+            const cursorSqDist2 = squaredCoordinateDistance(pixel, pixel2);
+            snappedToFirst = cursorSqDist1 < cursorSqDist2;
+            const cursorDistToEndpoint = Math.sqrt(
+              Math.min(cursorSqDist1, cursorSqDist2),
+            );
+            this.snappedToVertex_ =
+              cursorDistToEndpoint <= this.pixelTolerance_ * 3;
+          } else {
+            snappedToFirst = squaredDist1 < squaredDist2;
+            this.snappedToVertex_ = dist <= this.pixelTolerance_;
+          }
           // Stop and cleanup overlay vertex feature if a segment was hit and new vertex creation is not allowed by the insertVertexCondition
           if (
             !this.snappedToVertex_ &&
@@ -1971,19 +2113,18 @@ class Modify extends PointerInteraction {
             return;
           }
           if (this.snappedToVertex_) {
-            vertex =
-              squaredDist1 > squaredDist2
-                ? closestSegment[1]
-                : closestSegment[0];
+            vertex = snappedToFirst ? closestSegment[0] : closestSegment[1];
           }
+          this.lastNode_ = effectiveNode;
+          this.lastSnappedToSecond_ = !snappedToFirst;
           this.createOrUpdateVertexFeature_(
             vertex,
-            [node.feature],
-            [node.geometry],
+            [effectiveNode.feature],
+            [effectiveNode.geometry],
             this.snappedToVertex_,
           );
           const geometries = {};
-          geometries[getUid(node.geometry)] = true;
+          geometries[getUid(effectiveNode.geometry)] = true;
           for (let i = 1, ii = nodes.length; i < ii; ++i) {
             const segment = nodes[i].segment;
             if (
@@ -2051,28 +2192,38 @@ class Modify extends PointerInteraction {
       case 'CircularString': {
         coordinates = geometry.getCoordinates();
         const arcIndex = Math.floor(index / 2);
-        const isFirstHalf = index % 2 === 0;
+        if (arcIndex * 2 + 2 >= coordinates.length) {
+          return false;
+        }
         const circGeom =
           /** @type {import("../geom/CircularString.js").default} */ (geometry);
         const centerCoord = circGeom.flatCenterOfCircle(arcIndex);
         const cx = centerCoord[0],
           cy = centerCoord[1];
 
-        // check for degenerate (collinear) arc
+        // check for degenerate (collinear) arc — only the cross-product
+        // test is valid here. The center==midpoint check was wrong because
+        // it triggers for semicircles (180° arcs) which are perfectly valid.
         const arcStart = coordinates[arcIndex * 2];
         const arcMid = coordinates[arcIndex * 2 + 1];
         const arcEnd = coordinates[arcIndex * 2 + 2];
         const isDegenerate =
-          (cx === (arcStart[0] + arcEnd[0]) / 2 &&
-            cy === (arcStart[1] + arcEnd[1]) / 2) ||
-          (Math.abs(
+          Math.abs(
             (arcMid[0] - arcStart[0]) * (arcEnd[1] - arcStart[1]) -
               (arcMid[1] - arcStart[1]) * (arcEnd[0] - arcStart[0]),
-          ) < 1e-10);
+          ) < 1e-10;
 
         if (isDegenerate) {
-          // degenerate (collinear) arc - just insert like a line segment
-          coordinates.splice(index + 1, 0, vertex);
+          // Truly collinear points — insert vertex + a dummy midpoint so the
+          // CircularString retains an odd point count (staying valid).
+          const mid = [
+            (coordinates[index][0] + vertex[0]) / 2,
+            (coordinates[index][1] + vertex[1]) / 2,
+          ];
+          while (mid.length < geometry.getStride()) {
+            mid.push(0);
+          }
+          coordinates.splice(index + 1, 0, mid, vertex);
           break;
         }
 
@@ -2081,25 +2232,60 @@ class Modify extends PointerInteraction {
             (arcStart[1] - cy) * (arcStart[1] - cy),
         );
 
-        // determine clockwise from start/mid/end angles
-        let sAngle = Math.atan2(arcStart[1] - cy, arcStart[0] - cx);
-        let mAngle = Math.atan2(arcMid[1] - cy, arcMid[0] - cx);
-        let eAngle = Math.atan2(arcEnd[1] - cy, arcEnd[0] - cx);
-        if (sAngle < 0) {
-          sAngle += 2 * Math.PI;
+        // determine clockwise via cross-product (numerically stable)
+        const cw = isArcClockwise(
+          arcStart[0],
+          arcStart[1],
+          arcMid[0],
+          arcMid[1],
+          arcEnd[0],
+          arcEnd[1],
+        );
+
+        // Determine isFirstHalf geometrically from the vertex position.
+        // Both half-segments of the same arc have identical distance from
+        // closestPointOnArc, so `index % 2` is unreliable after sorting.
+        // Instead, check whether vertex angle lies between arcStart and
+        // arcMid (first half) or between arcMid and arcEnd (second half).
+        let vertexAngle = Math.atan2(vertex[1] - cy, vertex[0] - cx);
+        let midAngleCheck = Math.atan2(arcMid[1] - cy, arcMid[0] - cx);
+        let startAngleCheck = Math.atan2(
+          arcStart[1] - cy,
+          arcStart[0] - cx,
+        );
+        if (vertexAngle < 0) {
+          vertexAngle += 2 * Math.PI;
         }
-        if (mAngle < 0) {
-          mAngle += 2 * Math.PI;
+        if (midAngleCheck < 0) {
+          midAngleCheck += 2 * Math.PI;
         }
-        if (eAngle < 0) {
-          eAngle += 2 * Math.PI;
+        if (startAngleCheck < 0) {
+          startAngleCheck += 2 * Math.PI;
         }
-        // arc is CW if midpoint is NOT on the CCW path from start to end
-        const ccwSweep =
-          ((eAngle - sAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-        const midFromStart =
-          ((mAngle - sAngle) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-        const cw = !(midFromStart <= ccwSweep);
+        let isFirstHalf;
+        if (cw) {
+          // CW: first half sweep is from startAngle decreasing to midAngle
+          const firstHalfSweep =
+            ((startAngleCheck - midAngleCheck) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+          const vertexFromStart =
+            ((startAngleCheck - vertexAngle) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+          isFirstHalf = vertexFromStart <= firstHalfSweep;
+        } else {
+          // CCW: first half sweep is from startAngle increasing to midAngle
+          const firstHalfSweep =
+            ((midAngleCheck - startAngleCheck) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+          const vertexFromStart =
+            ((vertexAngle - startAngleCheck) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+          isFirstHalf = vertexFromStart <= firstHalfSweep;
+        }
 
         // compute the midpoint of the sub-arc that needs a new control point
         let subStart, subEnd;
@@ -2123,6 +2309,55 @@ class Modify extends PointerInteraction {
         }
         if (endAngle < 0) {
           endAngle += 2 * Math.PI;
+        }
+
+        // Minimum-sweep guard: refuse insertion if either resulting sub-arc
+        // would be too small (< 5°), which creates near-degenerate geometry.
+        const MIN_SWEEP = (5 * Math.PI) / 180; // 5 degrees
+        let subSweep;
+        if (cw) {
+          subSweep =
+            ((startAngle - endAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (2 * Math.PI);
+        } else {
+          subSweep =
+            ((endAngle - startAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (2 * Math.PI);
+        }
+        if (subSweep > 0 && subSweep < MIN_SWEEP) {
+          return false;
+        }
+        // Also check the other sub-arc (the one that keeps M as midpoint)
+        let otherStartAngle, otherEndAngle;
+        if (isFirstHalf) {
+          // Other sub-arc is [P → C]
+          otherStartAngle = Math.atan2(vertex[1] - cy, vertex[0] - cx);
+          otherEndAngle = Math.atan2(arcEnd[1] - cy, arcEnd[0] - cx);
+        } else {
+          // Other sub-arc is [A → P]
+          otherStartAngle = Math.atan2(arcStart[1] - cy, arcStart[0] - cx);
+          otherEndAngle = Math.atan2(vertex[1] - cy, vertex[0] - cx);
+        }
+        if (otherStartAngle < 0) {
+          otherStartAngle += 2 * Math.PI;
+        }
+        if (otherEndAngle < 0) {
+          otherEndAngle += 2 * Math.PI;
+        }
+        let otherSweep;
+        if (cw) {
+          otherSweep =
+            ((otherStartAngle - otherEndAngle) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+        } else {
+          otherSweep =
+            ((otherEndAngle - otherStartAngle) % (2 * Math.PI) +
+              2 * Math.PI) %
+            (2 * Math.PI);
+        }
+        if (otherSweep > 0 && otherSweep < MIN_SWEEP) {
+          return false;
         }
 
         let midAngle;
@@ -2196,13 +2431,60 @@ class Modify extends PointerInteraction {
         // create 4 new segments for the two new arcs
         const newCoords = geometry.getCoordinates();
         const baseIdx = arcIndex * 2;
-        const geomExtent = geometry.getExtent().slice();
-        for (let j = 0; j < newCoords.length; ++j) {
-          geomExtent[0] = Math.min(geomExtent[0], newCoords[j][0]);
-          geomExtent[1] = Math.min(geomExtent[1], newCoords[j][1]);
-          geomExtent[2] = Math.max(geomExtent[2], newCoords[j][0]);
-          geomExtent[3] = Math.max(geomExtent[3], newCoords[j][1]);
+
+        // Compute per-arc extents for the two new arcs
+        const arcExtents = [];
+        for (let a = 0; a < 2; ++a) {
+          const ai = baseIdx + a * 2;
+          const ab = newCoords[ai],
+            am = newCoords[ai + 1],
+            ae = newCoords[ai + 2];
+          const ac = getCircleCenter(
+            ab[0],
+            ab[1],
+            am[0],
+            am[1],
+            ae[0],
+            ae[1],
+          );
+          let ext;
+          if (ac) {
+            const bc = getArcBoundingCoords(
+              ab[0],
+              ab[1],
+              am[0],
+              am[1],
+              ae[0],
+              ae[1],
+              ac[0],
+              ac[1],
+            );
+            let minX = Infinity,
+              minY = Infinity,
+              maxX = -Infinity,
+              maxY = -Infinity;
+            for (let b = 0; b < bc.length; b += 2) {
+              minX = Math.min(minX, bc[b]);
+              minY = Math.min(minY, bc[b + 1]);
+              maxX = Math.max(maxX, bc[b]);
+              maxY = Math.max(maxY, bc[b + 1]);
+            }
+            minX = Math.min(minX, ab[0], am[0], ae[0]);
+            minY = Math.min(minY, ab[1], am[1], ae[1]);
+            maxX = Math.max(maxX, ab[0], am[0], ae[0]);
+            maxY = Math.max(maxY, ab[1], am[1], ae[1]);
+            ext = [minX, minY, maxX, maxY];
+          } else {
+            ext = [
+              Math.min(ab[0], am[0], ae[0]),
+              Math.min(ab[1], am[1], ae[1]),
+              Math.max(ab[0], am[0], ae[0]),
+              Math.max(ab[1], am[1], ae[1]),
+            ];
+          }
+          arcExtents.push(ext);
         }
+
         for (let k = 0; k < 4; ++k) {
           const seg = [newCoords[baseIdx + k], newCoords[baseIdx + k + 1]];
           /** @type {SegmentData} */
@@ -2215,16 +2497,11 @@ class Modify extends PointerInteraction {
             featureSegments: featureSegments,
           };
           featureSegments.push(sd);
-          rTree.insert(geomExtent, sd);
+          // Use the extent for the arc this segment belongs to
+          rTree.insert(arcExtents[k < 2 ? 0 : 1], sd);
           // push the two segments adjacent to vertex as drag segments
           if (k === 1 || k === 2) {
             this.dragSegments_.push([sd, k === 1 ? 1 : 0]);
-          }
-        }
-        // Update extents on all other sibling segments
-        for (const sd of featureSegments) {
-          if (sd.index < baseIdx || sd.index >= baseIdx + 4) {
-            rTree.update(geomExtent, sd);
           }
         }
         return true;
@@ -2762,7 +3039,43 @@ function closestOnSegmentData(pointCoordinates, segmentData, projection) {
  */
 function getDefaultStyleFunction() {
   const style = createEditingStyle();
+  const midpointStyle = [
+    new Style({
+      image: new CircleStyle({
+        radius: 4,
+        fill: new Fill({
+          color: [0, 153, 255, 0.5],
+        }),
+        stroke: new Stroke({
+          color: [255, 255, 255, 1],
+          width: 1,
+        }),
+      }),
+      zIndex: Infinity,
+    }),
+  ];
+  const insertStyle = [
+    new Style({
+      image: new CircleStyle({
+        radius: 5,
+        fill: new Fill({
+          color: [255, 165, 0, 0.8],
+        }),
+        stroke: new Stroke({
+          color: [255, 255, 255, 1],
+          width: 1.5,
+        }),
+      }),
+      zIndex: Infinity,
+    }),
+  ];
   return function (feature, resolution) {
+    if (feature.get('midpoint')) {
+      return midpointStyle;
+    }
+    if (feature.get('existing') === false) {
+      return insertStyle;
+    }
     return style['Point'];
   };
 }

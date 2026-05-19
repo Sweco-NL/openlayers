@@ -754,72 +754,6 @@ describe('ol/geom/CurvePolygon.js', function () {
     });
   });
 
-  describe('#getRingCount()', function () {
-    it('returns the number of rings', function () {
-      const outer = new LineString([
-        [0, 0],
-        [10, 0],
-        [10, 10],
-        [0, 10],
-        [0, 0],
-      ]);
-      const inner = new LineString([
-        [2, 2],
-        [8, 2],
-        [8, 8],
-        [2, 8],
-        [2, 2],
-      ]);
-      const cp = new CurvePolygon([outer, inner]);
-      expect(cp.getRingCount()).to.be(2);
-    });
-
-    it('returns 1 for single ring', function () {
-      const ring = new CircularString([
-        [5, 0],
-        [-5, 0],
-        [5, 0],
-      ]);
-      const cp = new CurvePolygon([ring]);
-      expect(cp.getRingCount()).to.be(1);
-    });
-  });
-
-  describe('#getRing()', function () {
-    it('returns the ring at the given index', function () {
-      const outer = new LineString([
-        [0, 0],
-        [10, 0],
-        [10, 10],
-        [0, 10],
-        [0, 0],
-      ]);
-      const inner = new LineString([
-        [2, 2],
-        [8, 2],
-        [8, 8],
-        [2, 8],
-        [2, 2],
-      ]);
-      const cp = new CurvePolygon([outer, inner]);
-      expect(cp.getRing(0).getType()).to.be('LineString');
-      expect(cp.getRing(1).getType()).to.be('LineString');
-    });
-
-    it('returns null for out of range index', function () {
-      const ring = new LineString([
-        [0, 0],
-        [10, 0],
-        [10, 10],
-        [0, 10],
-        [0, 0],
-      ]);
-      const cp = new CurvePolygon([ring]);
-      expect(cp.getRing(-1)).to.be(null);
-      expect(cp.getRing(1)).to.be(null);
-    });
-  });
-
   describe('#appendRing()', function () {
     it('adds a ring to the polygon', function () {
       const outer = new LineString([
@@ -830,7 +764,7 @@ describe('ol/geom/CurvePolygon.js', function () {
         [0, 0],
       ]);
       const cp = new CurvePolygon([outer]);
-      expect(cp.getRingCount()).to.be(1);
+      expect(cp.getRingsArray().length).to.be(1);
 
       const inner = new LineString([
         [5, 5],
@@ -840,7 +774,7 @@ describe('ol/geom/CurvePolygon.js', function () {
         [5, 5],
       ]);
       cp.appendRing(inner);
-      expect(cp.getRingCount()).to.be(2);
+      expect(cp.getRingsArray().length).to.be(2);
     });
 
     it('fires a change event', function () {
@@ -1057,7 +991,7 @@ describe('ol/geom/CurvePolygon.js', function () {
     });
 
     it('has zero ring count', function () {
-      expect(cp.getRingCount()).to.be(0);
+      expect(cp.getRingsArray().length).to.be(0);
     });
   });
 
@@ -1077,7 +1011,7 @@ describe('ol/geom/CurvePolygon.js', function () {
       const cloned = cp.clone();
       expect(cloned).not.to.be(cp);
       expect(cloned.getType()).to.be('CurvePolygon');
-      expect(cloned.getRingCount()).to.be(2);
+      expect(cloned.getRingsArray().length).to.be(2);
       const origRings = cp.getRingsArray();
       const clonedRings = cloned.getRingsArray();
       for (let i = 0; i < origRings.length; ++i) {
@@ -1125,7 +1059,7 @@ describe('ol/geom/CurvePolygon.js', function () {
       ]);
       // should not throw
       const cp = new CurvePolygon([csRing, lineRing]);
-      expect(cp.getRingCount()).to.be(2);
+      expect(cp.getRingsArray().length).to.be(2);
     });
   });
 

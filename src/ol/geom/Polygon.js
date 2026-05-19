@@ -17,6 +17,7 @@ import {getInteriorPointOfArray} from './flat/interiorpoint.js';
 import {intersectsLinearRingArray} from './flat/intersectsextent.js';
 import {linearRingsAreOriented, orientLinearRings} from './flat/orient.js';
 import {quantizeArray} from './flat/simplify.js';
+import {forEach} from './flat/segments.js';
 
 /**
  * @classdesc
@@ -195,6 +196,31 @@ class Polygon extends SimpleGeometry {
       this.ends_,
       this.stride,
     );
+  }
+
+  /**
+   * Iterate over each segment of all rings, calling the provided callback.
+   * If the callback returns a truthy value the function returns that
+   * value immediately. Otherwise the function returns `false`.
+   * @param {function(this: S, import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate): T} callback Function
+   *     called for each segment. The function will receive two arguments, the start and end coordinates of the segment.
+   * @return {T|boolean} Value.
+   * @template T,S
+   * @api
+   */
+  forEachSegment(callback) {
+    const flatCoordinates = this.flatCoordinates;
+    const ends = this.ends_;
+    const stride = this.stride;
+    let offset = 0;
+    for (let i = 0, ii = ends.length; i < ii; i++) {
+      const ret = forEach(flatCoordinates, offset, ends[i], stride, callback);
+      if (ret) {
+        return ret;
+      }
+      offset = ends[i];
+    }
+    return false;
   }
 
   /**

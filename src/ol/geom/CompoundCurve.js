@@ -12,7 +12,9 @@ import {
   getCenter,
   intersects,
 } from '../extent.js';
+import CircularString from './CircularString.js';
 import Geometry from './Geometry.js';
+import LineString from './LineString.js';
 
 /**
  * A sub-geometry of a CompoundCurve (CircularString or LineString).
@@ -479,28 +481,35 @@ class CompoundCurve extends Geometry {
    */
   forEachArc(callback) {
     const geometries = this.geometries_;
+    let globalIndex = 0;
     for (let i = 0, ii = geometries.length; i < ii; ++i) {
       const geom = geometries[i];
-      let ret;
       if (geom.getType() === 'CircularString') {
-        ret = /** @type {import("./CircularString.js").default} */ (
+        const ret = /** @type {import("./CircularString.js").default} */ (
           geom
-        ).forEachArc(
-          /** @type {function(import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate): *} */ (
-            callback
-          ),
-        );
+        ).forEachArc(function (bx, by, mx, my, ex, ey) {
+          return callback(bx, by, mx, my, ex, ey, globalIndex++);
+        });
+        if (ret) {
+          return ret;
+        }
       } else {
-        ret = /** @type {import("./LineString.js").default} */ (
-          geom
-        ).forEachSegment(
-          /** @type {function(this:*, import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate): *} */ (
-            callback
-          ),
-        );
-      }
-      if (ret) {
-        return ret;
+        // LineString: emit degenerate arcs (midpoint = segment center)
+        const coords = geom.getFlatCoordinates();
+        const stride = geom.getStride();
+        const end = coords.length;
+        for (let j = 0; j + stride < end; j += stride) {
+          const bx = coords[j];
+          const by = coords[j + 1];
+          const ex = coords[j + stride];
+          const ey = coords[j + stride + 1];
+          const mx = (bx + ex) / 2;
+          const my = (by + ey) / 2;
+          const ret = callback(bx, by, mx, my, ex, ey, globalIndex++);
+          if (ret) {
+            return ret;
+          }
+        }
       }
     }
     return false;
@@ -646,6 +655,72 @@ class CompoundCurve extends Geometry {
     }
     return coords;
   }
+
+  /**
+   * Returns tessellated flat coordinate data suitable for topology operations.
+   * This provides the bridge between curve geometry and flat-coordinate
+   * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).
+   *
+   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * @return {{flatCoordinates: Array<number>, ends: Array<number>, stride: number}}
+   *   Tessellated flat coordinates with end indices and stride.
+   * @api
+   */
+  getTessellatedFlatData(pointsPerArc) {
+    const flatCoordinates = this.tessellate(pointsPerArc);
+    return {
+      flatCoordinates,
+      ends: [flatCoordinates.length],
+      stride: 2,
+    };
+  }
 }
 
 export default CompoundCurve;
+
+/**
+ * Create a curve geometry from an array of coordinates and a segment type.
+ *
+ * Handles the non-trivial edge cases of CircularString construction:
+ * - Odd count (>= 3) → valid CircularString
+ * - Even count (>= 4) with closed ring (first ≈ last) → drop duplicate close point
+ * - Even count (>= 4) non-closed → CircularString of first n-1 points + LineString tail
+ * - Count < 3 for arc type → LineString fallback
+ *
+ * @param {Array<Array<number>>} coordinates Array of [x, y] coordinates.
+ * @param {string} [type] Segment type: 'arc' or 'line'.
+ * @param {number} [closeTolerance] Tolerance for closed-ring detection.
+ * @return {import("./SimpleGeometry.js").default} The resulting geometry.
+ */
+export function coordinatesToCurveGeometry(coordinates, type, closeTolerance) {
+  if (type === undefined) {
+    type = 'arc';
+  }
+  if (closeTolerance === undefined) {
+    closeTolerance = 1e-6;
+  }
+  if (type !== 'arc' || coordinates.length < 3) {
+    return new LineString(coordinates);
+  }
+  // Check if this is a closed ring (first ≈ last) with even count
+  const n = coordinates.length;
+  const isClosedEven =
+    n >= 4 &&
+    n % 2 === 0 &&
+    Math.abs(coordinates[0][0] - coordinates[n - 1][0]) < closeTolerance &&
+    Math.abs(coordinates[0][1] - coordinates[n - 1][1]) < closeTolerance;
+  if (isClosedEven) {
+    // Drop duplicate close point → odd count → valid closed CircularString
+    return new CircularString(coordinates.slice(0, -1));
+  }
+  if (n % 2 === 1) {
+    return new CircularString(coordinates);
+  }
+  // Even count, non-closed: arc of first n-1 + trailing LineString segment
+  const arcCoords = coordinates.slice(0, -1);
+  const tailCoords = [coordinates[n - 2], coordinates[n - 1]];
+  return new CompoundCurve([
+    new CircularString(arcCoords),
+    new LineString(tailCoords),
+  ]);
+}

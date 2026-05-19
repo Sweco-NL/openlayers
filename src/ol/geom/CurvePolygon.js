@@ -21,6 +21,7 @@ import {
   linearRingsAreOriented,
   orientLinearRings,
 } from './flat/orient.js';
+import {arcsAreEqual, getArcArcCrossingPoints} from './flat/topology.js';
 import Geometry from './Geometry.js';
 import Point from './Point.js';
 
@@ -365,31 +366,6 @@ class CurvePolygon extends Geometry {
   }
 
   /**
-   * Return the number of rings of the polygon, this includes the outer
-   * ring and any inner rings (holes).
-   * @return {number} Number of rings.
-   * @api
-   */
-  getRingCount() {
-    return this.rings_.length;
-  }
-
-  /**
-   * Return the Nth ring of the polygon geometry. The outer ring is at
-   * index `0` and inner rings are at index `1` and beyond. Return `null`
-   * if the given index is out of range.
-   * @param {number} index Index.
-   * @return {CurveRing|null} Ring.
-   * @api
-   */
-  getRing(index) {
-    if (index < 0 || index >= this.rings_.length) {
-      return null;
-    }
-    return this.rings_[index];
-  }
-
-  /**
    * Get the end indices of the tessellated flat coordinates for each ring.
    * Ensures tessellation is up to date before returning.
    * @return {Array<number>} Tessellated ring end indices.
@@ -397,6 +373,23 @@ class CurvePolygon extends Geometry {
   getTessellatedEnds() {
     this.getOrientedFlatCoordinates();
     return this.tessellatedEnds_;
+  }
+
+  /**
+   * Returns tessellated flat coordinate data suitable for topology operations.
+   * This provides the bridge between curve geometry and flat-coordinate
+   * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).
+   *
+   * @return {{flatCoordinates: Array<number>, ends: Array<number>, stride: number}}
+   *   Tessellated flat coordinates with ring end indices and stride.
+   * @api
+   */
+  getTessellatedFlatData() {
+    return {
+      flatCoordinates: this.getOrientedFlatCoordinates(),
+      ends: this.getTessellatedEnds(),
+      stride: 2,
+    };
   }
 
   /**
@@ -792,6 +785,101 @@ class CurvePolygon extends Geometry {
         );
         if (ret) {
           return ret;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Find all self-intersection points within this CurvePolygon.
+   * Tests all non-identical arc pairs within and across rings for crossings.
+   *
+   * @param {number} [epsilonSq] Squared distance threshold for crossing
+   *   detection. Default 4 (suitable for projected CRS with meter units).
+   * @param {number} [sameArcToleranceSq] Tolerance for arc equality check.
+   *   Default 1e-4.
+   * @return {Array<Array<number>>} Array of [x, y] crossing points.
+   * @api
+   */
+  getSelfIntersections(epsilonSq, sameArcToleranceSq) {
+    if (epsilonSq === undefined) {
+      epsilonSq = 4;
+    }
+    if (sameArcToleranceSq === undefined) {
+      sameArcToleranceSq = 1e-4;
+    }
+    const arcs = [];
+    this.forEachArc(function (bx, by, mx, my, ex, ey) {
+      arcs.push([bx, by, mx, my, ex, ey]);
+    });
+    const crossings = [];
+    for (let i = 0, ii = arcs.length; i < ii; ++i) {
+      for (let j = i + 1; j < ii; ++j) {
+        if (arcsAreEqual(arcs[i], arcs[j], sameArcToleranceSq)) {
+          continue;
+        }
+        const a = arcs[i],
+          b = arcs[j];
+        const pts = getArcArcCrossingPoints(
+          a[0],
+          a[1],
+          a[2],
+          a[3],
+          a[4],
+          a[5],
+          b[0],
+          b[1],
+          b[2],
+          b[3],
+          b[4],
+          b[5],
+          epsilonSq,
+        );
+        for (let k = 0, kk = pts.length; k < kk; ++k) {
+          crossings.push(pts[k]);
+        }
+      }
+    }
+    return crossings;
+  }
+
+  /**
+   * Call the callback for each arc across all rings with flat scalar coordinates.
+   * @param {function(number, number, number, number, number, number, number): *} callback
+   *     Function called for each arc with (bx, by, mx, my, ex, ey, index).
+   * @return {*} Value.
+   * @api
+   */
+  forEachArc(callback) {
+    const rings = this.rings_;
+    let globalIndex = 0;
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const ring = rings[i];
+      const type = ring.getType();
+      if (type === 'CircularString' || type === 'CompoundCurve') {
+        const ret = ring.forEachArc(function (bx, by, mx, my, ex, ey) {
+          return callback(bx, by, mx, my, ex, ey, globalIndex++);
+        });
+        if (ret) {
+          return ret;
+        }
+      } else {
+        // LinearRing/LineString: emit degenerate arcs
+        const coords = ring.getFlatCoordinates();
+        const stride = ring.getStride();
+        const end = coords.length;
+        for (let j = 0; j + stride < end; j += stride) {
+          const bx = coords[j];
+          const by = coords[j + 1];
+          const ex = coords[j + stride];
+          const ey = coords[j + stride + 1];
+          const mx = (bx + ex) / 2;
+          const my = (by + ey) / 2;
+          const ret = callback(bx, by, mx, my, ex, ey, globalIndex++);
+          if (ret) {
+            return ret;
+          }
         }
       }
     }

@@ -1,5 +1,6 @@
 import {isEmpty} from '../../../../src/ol/extent.js';
 import CircularString from '../../../../src/ol/geom/CircularString.js';
+import CurvePolygon from '../../../../src/ol/geom/CurvePolygon.js';
 import expect from '../../expect.js';
 
 describe('ol/geom/CircularString.js', function () {
@@ -398,12 +399,13 @@ describe('ol/geom/CircularString.js', function () {
   });
 
   describe('arcCount edge cases', function () {
-    it('returns 0 for fewer than 3 points', function () {
-      const cs = new CircularString([
-        [0, 0],
-        [1, 1],
-      ]);
-      expect(cs.arcCount()).to.be(0);
+    it('throws for fewer than 3 points (even count)', function () {
+      expect(function () {
+        new CircularString([
+          [0, 0],
+          [1, 1],
+        ]);
+      }).to.throwException(/odd number of points/);
     });
 
     it('returns 1 for exactly 3 points', function () {
@@ -620,7 +622,7 @@ describe('ol/geom/CircularString.js', function () {
   });
 
   describe('#forEachArc()', function () {
-    it('calls callback once per arc with start, mid, end', function () {
+    it('calls callback once per arc with bx,by,mx,my,ex,ey,index', function () {
       const cs = new CircularString([
         [0, 0],
         [1, 1],
@@ -629,15 +631,17 @@ describe('ol/geom/CircularString.js', function () {
         [4, 0],
       ]);
       const segments = [];
-      cs.forEachArc(function (start, mid, end) {
-        segments.push({start, mid, end});
+      cs.forEachArc(function (bx, by, mx, my, ex, ey, index) {
+        segments.push({bx, by, mx, my, ex, ey, index});
       });
       expect(segments.length).to.be(2);
-      expect(segments[0].start[0]).to.be(0);
-      expect(segments[0].mid[0]).to.be(1);
-      expect(segments[0].end[0]).to.be(2);
-      expect(segments[1].start[0]).to.be(2);
-      expect(segments[1].end[0]).to.be(4);
+      expect(segments[0].bx).to.be(0);
+      expect(segments[0].mx).to.be(1);
+      expect(segments[0].ex).to.be(2);
+      expect(segments[0].index).to.be(0);
+      expect(segments[1].bx).to.be(2);
+      expect(segments[1].ex).to.be(4);
+      expect(segments[1].index).to.be(1);
     });
 
     it('returns false when no callback returns truthy', function () {
@@ -815,6 +819,116 @@ describe('ol/geom/CircularString.js', function () {
       }
       expect(found3).to.be(true);
     });
+
+    it('produces exact flatCoordinate values at arc boundaries', function () {
+      const ring = new CircularString([
+        [0, 0],
+        [5, 5],
+        [10, 0],
+        [5, -5],
+        [0, 0],
+      ]);
+
+      const flatCoords = ring.getFlatCoordinates();
+      const stride = ring.getStride();
+      const tessCoords = ring.tessellate();
+
+      // First point of tessellation = exact arc 0 start
+      expect(tessCoords[0] === flatCoords[0]).to.be(true);
+      expect(tessCoords[1] === flatCoords[1]).to.be(true);
+
+      // Arc 0 end = arc 1 start at flatCoords offset stride*2
+      // tessellation: arc 0 has 37 points (j=0..36), end at index 36, offset 72
+      expect(tessCoords[72] === flatCoords[stride * 2]).to.be(true);
+      expect(tessCoords[73] === flatCoords[stride * 2 + 1]).to.be(true);
+
+      // Last point of tessellation = closing point
+      const lastIdx = tessCoords.length - 2;
+      expect(tessCoords[lastIdx] === flatCoords[stride * 4]).to.be(true);
+      expect(tessCoords[lastIdx + 1] === flatCoords[stride * 4 + 1]).to.be(
+        true,
+      );
+    });
+
+    it('produces exact midpoint values at through-points', function () {
+      const ring = new CircularString([
+        [0, 0],
+        [5, 5],
+        [10, 0],
+        [5, -5],
+        [0, 0],
+      ]);
+
+      const flatCoords = ring.getFlatCoordinates();
+      const stride = ring.getStride();
+      const tessCoords = ring.tessellate();
+
+      // Through-point [5, 5] at odd index 1
+      const midX = flatCoords[stride * 1];
+      const midY = flatCoords[stride * 1 + 1];
+
+      let foundMid = false;
+      for (let i = 0; i < tessCoords.length; i += 2) {
+        if (tessCoords[i] === midX && tessCoords[i + 1] === midY) {
+          foundMid = true;
+          break;
+        }
+      }
+      expect(foundMid).to.be(true);
+
+      // Through-point [5, -5] at odd index 3
+      const mid2X = flatCoords[stride * 3];
+      const mid2Y = flatCoords[stride * 3 + 1];
+
+      let foundMid2 = false;
+      for (let i = 0; i < tessCoords.length; i += 2) {
+        if (tessCoords[i] === mid2X && tessCoords[i + 1] === mid2Y) {
+          foundMid2 = true;
+          break;
+        }
+      }
+      expect(foundMid2).to.be(true);
+    });
+
+    it('arc boundary tessellation point passes isSourceArcEndpoint check', function () {
+      const ring = new CircularString([
+        [0, 0],
+        [5, 5],
+        [10, 0],
+        [5, -5],
+        [0, 0],
+      ]);
+
+      const tessCoords = ring.tessellate();
+      const coords = ring.getCoordinates();
+
+      // The tessellation point at arc boundary [10, 0] (offset 72, 73)
+      const tracedX = tessCoords[72];
+      const tracedY = tessCoords[73];
+
+      // Check against even-index coordinates (arc endpoints)
+      let foundAtEvenIndex = false;
+      for (let i = 0; i < coords.length; i += 2) {
+        if (tracedX === coords[i][0] && tracedY === coords[i][1]) {
+          foundAtEvenIndex = true;
+          break;
+        }
+      }
+      expect(foundAtEvenIndex).to.be(true);
+
+      // A mid-arc interpolated point does NOT pass
+      const interpX = tessCoords[20]; // j=10 of arc 0
+      const interpY = tessCoords[21];
+
+      let interpIsEndpoint = false;
+      for (let i = 0; i < coords.length; i += 2) {
+        if (interpX === coords[i][0] && interpY === coords[i][1]) {
+          interpIsEndpoint = true;
+          break;
+        }
+      }
+      expect(interpIsEndpoint).to.be(false);
+    });
   });
 
   describe('degenerate arcs', function () {
@@ -966,14 +1080,14 @@ describe('ol/geom/CircularString.js', function () {
     });
   });
 
-  describe('arcExtent', function () {
+  describe('arcExtent_', function () {
     it('returns a valid extent for a single arc', function () {
       const cs = new CircularString([
         [0, 0],
         [5, 5],
         [10, 0],
       ]);
-      const extent = cs.arcExtent(0);
+      const extent = cs.arcExtent_(0);
       expect(extent).to.be.an(Array);
       expect(extent.length).to.be(4);
       // extent must contain all three control points
@@ -989,7 +1103,7 @@ describe('ol/geom/CircularString.js', function () {
         [-5, 0],
         [5, 0],
       ]);
-      const extent = cs.arcExtent(0);
+      const extent = cs.arcExtent_(0);
       // full circle centered at origin with radius 5
       expect(extent[0]).to.roughlyEqual(-5, 1e-6);
       expect(extent[1]).to.roughlyEqual(-5, 1e-6);
@@ -1005,8 +1119,8 @@ describe('ol/geom/CircularString.js', function () {
         [15, -5],
         [20, 0],
       ]);
-      const extent0 = cs.arcExtent(0);
-      const extent1 = cs.arcExtent(1);
+      const extent0 = cs.arcExtent_(0);
+      const extent1 = cs.arcExtent_(1);
       expect(extent0).to.be.an(Array);
       expect(extent1).to.be.an(Array);
       // first arc is in upper half, second in lower half
@@ -1107,6 +1221,43 @@ describe('ol/geom/CircularString.js', function () {
         [-5, 0],
       ]);
       expect(cs.intersectsExtent([100, 100, 200, 200])).to.be(false);
+    });
+  });
+
+  describe('constructor preserves precision', function () {
+    it('preserves 15-digit float values through deflate/inflate cycle', function () {
+      const cs = new CircularString([
+        [1.1234567890123, 2.9876543210987],
+        [3.1415926535897, 4.2718281828459],
+        [5.5772156649015, 6.6931471805599],
+      ]);
+
+      const coords = cs.getCoordinates();
+      expect(coords[0][0] === 1.1234567890123).to.be(true);
+      expect(coords[0][1] === 2.9876543210987).to.be(true);
+      expect(coords[1][0] === 3.1415926535897).to.be(true);
+      expect(coords[1][1] === 4.2718281828459).to.be(true);
+      expect(coords[2][0] === 5.5772156649015).to.be(true);
+      expect(coords[2][1] === 6.6931471805599).to.be(true);
+    });
+
+    it('CurvePolygon ring preserves values through construction', function () {
+      const ring = new CircularString([
+        [1.1234567890123, 2.9876543210987],
+        [3.1415926535897, 4.2718281828459],
+        [5.5772156649015, 6.6931471805599],
+        [7.3890560989306, 8.4142135623730],
+        [1.1234567890123, 2.9876543210987],
+      ]);
+      const cp = new CurvePolygon([ring]);
+      const retrieved = cp.getRingsArray()[0].getCoordinates();
+
+      expect(retrieved[0][0] === 1.1234567890123).to.be(true);
+      expect(retrieved[0][1] === 2.9876543210987).to.be(true);
+      expect(retrieved[2][0] === 5.5772156649015).to.be(true);
+      expect(retrieved[2][1] === 6.6931471805599).to.be(true);
+      expect(retrieved[4][0] === retrieved[0][0]).to.be(true);
+      expect(retrieved[4][1] === retrieved[0][1]).to.be(true);
     });
   });
 });

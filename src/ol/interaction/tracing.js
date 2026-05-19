@@ -4,6 +4,9 @@
  */
 
 import {distance} from '../coordinate.js';
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
 import MultiLineString from '../geom/MultiLineString.js';
@@ -270,6 +273,30 @@ function appendGeometryTraceTargets(coordinate, geometry, targets) {
     }
     return;
   }
+  if (geometry instanceof CurvePolygon) {
+    const rings = geometry.getRingsArray();
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const ring = rings[i];
+      const tessellated = ring.tessellate
+        ? ring.tessellate()
+        : ring.getFlatCoordinates();
+      const coords = flatToCoordinates_(tessellated);
+      appendTraceTarget(coordinate, coords, true, targets);
+    }
+    return;
+  }
+  if (geometry instanceof CompoundCurve) {
+    const tessellated = geometry.tessellate();
+    const coords = flatToCoordinates_(tessellated);
+    appendTraceTarget(coordinate, coords, false, targets);
+    return;
+  }
+  if (geometry instanceof CircularString) {
+    const tessellated = geometry.tessellate();
+    const coords = flatToCoordinates_(tessellated);
+    appendTraceTarget(coordinate, coords, false, targets);
+    return;
+  }
   if (geometry instanceof GeometryCollection) {
     const geometries = geometry.getGeometries();
     for (let i = 0; i < geometries.length; ++i) {
@@ -376,6 +403,19 @@ function getCumulativeSquaredDistance(coordinates, startIndex, endIndex) {
  * @type {PointSegmentRelationship}
  */
 const sharedRel = {along: 0, squaredDistance: 0};
+
+/**
+ * Convert flat coordinates (stride 2) to an array of coordinate pairs.
+ * @param {Array<number>} flat Flat coordinates with stride 2.
+ * @return {Array<import("../coordinate.js").Coordinate>} Coordinate array.
+ */
+function flatToCoordinates_(flat) {
+  const coords = [];
+  for (let i = 0, ii = flat.length; i < ii; i += 2) {
+    coords.push([flat[i], flat[i + 1]]);
+  }
+  return coords;
+}
 
 /**
  * @param {number} x The point x.

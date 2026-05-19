@@ -1,6 +1,7 @@
 /**
  * @module ol/geom/CircularString
  */
+import {assert} from '../asserts.js';
 import {warn} from '../console.js';
 import {
   closestSquaredDistanceXY,
@@ -10,7 +11,15 @@ import {
   intersects,
 } from '../extent.js';
 import SimpleGeometry from './SimpleGeometry.js';
-import {CircularArc, Vector2} from './flat/CircularArc.js';
+import {
+  angleDistance,
+  getArcAngles,
+  getArcBoundingCoords,
+  getArcRadius,
+  getCircleCenter,
+  isArcClockwise,
+  isFullCircle,
+} from './flat/arc.js';
 import {deflateCoordinates} from './flat/deflate.js';
 import {inflateCoordinates} from './flat/inflate.js';
 
@@ -77,20 +86,25 @@ class CircularString extends SimpleGeometry {
    */
   updateFlatCenterOfCircleCoordinates() {
     const arcCount = this.arcCount();
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
     this.flatCenterOfCircleCoordinates_ = new Array(arcCount * 2);
     for (let i = 0; i < arcCount; ++i) {
-      const arc = this.arc(i);
-      const offset = i * 2;
-      const center = arc.centerOfCircle();
+      const offset = i * 2 * stride;
+      const bx = flat[offset];
+      const by = flat[offset + 1];
+      const mx = flat[offset + stride];
+      const my = flat[offset + stride + 1];
+      const ex = flat[offset + stride * 2];
+      const ey = flat[offset + stride * 2 + 1];
+      const ci = i * 2;
+      const center = getCircleCenter(bx, by, mx, my, ex, ey);
       if (center) {
-        this.flatCenterOfCircleCoordinates_[offset] = center.x;
-        this.flatCenterOfCircleCoordinates_[offset + 1] = center.y;
+        this.flatCenterOfCircleCoordinates_[ci] = center[0];
+        this.flatCenterOfCircleCoordinates_[ci + 1] = center[1];
       } else {
-        // degenerate arc - store midpoint of chord as placeholder
-        this.flatCenterOfCircleCoordinates_[offset] =
-          (arc.begin.x + arc.end.x) / 2;
-        this.flatCenterOfCircleCoordinates_[offset + 1] =
-          (arc.begin.y + arc.end.y) / 2;
+        this.flatCenterOfCircleCoordinates_[ci] = (bx + ex) / 2;
+        this.flatCenterOfCircleCoordinates_[ci + 1] = (by + ey) / 2;
       }
     }
   }
@@ -104,13 +118,20 @@ class CircularString extends SimpleGeometry {
    */
   updateDrawableFlatCoordinates() {
     const arcCount = this.arcCount();
-    // build drawable coords only for valid (non-degenerate) arcs
-    // layout per arc: [startX, startY, midX, midY, centerX, centerY]
-    // plus trailing [endX, endY] of the last arc. Arcs share endpoints
-    // so stride is 6, with the renderer reading d..d+7.
+    const stride = this.getStride();
+    const flatCoords = this.getFlatCoordinates();
     let validCount = 0;
     for (let i = 0; i < arcCount; ++i) {
-      if (this.arc(i).centerOfCircle()) {
+      const offset = i * 2 * stride;
+      const center = getCircleCenter(
+        flatCoords[offset],
+        flatCoords[offset + 1],
+        flatCoords[offset + stride],
+        flatCoords[offset + stride + 1],
+        flatCoords[offset + stride * 2],
+        flatCoords[offset + stride * 2 + 1],
+      );
+      if (center) {
         validCount++;
       }
     }
@@ -118,36 +139,48 @@ class CircularString extends SimpleGeometry {
       validCount > 0 ? validCount * 6 + 2 : 0,
     );
     const drawableCoords = this.drawableFlatCoordinates_;
-    const stride = this.getStride();
-    const flatCoords = this.getFlatCoordinates();
-    let offset = 0;
+    let dOffset = 0;
     for (let i = 0; i < arcCount; ++i) {
-      if (!this.arc(i).centerOfCircle()) {
+      const offset = i * 2 * stride;
+      const center = getCircleCenter(
+        flatCoords[offset],
+        flatCoords[offset + 1],
+        flatCoords[offset + stride],
+        flatCoords[offset + stride + 1],
+        flatCoords[offset + stride * 2],
+        flatCoords[offset + stride * 2 + 1],
+      );
+      if (!center) {
         continue;
       }
-      const startX = i * stride * 2;
-      const middleX = startX + stride;
       // start coordinates
-      drawableCoords[offset] = flatCoords[startX];
-      drawableCoords[offset + 1] = flatCoords[startX + 1];
+      drawableCoords[dOffset] = flatCoords[offset];
+      drawableCoords[dOffset + 1] = flatCoords[offset + 1];
       // middle coordinates
-      drawableCoords[offset + 2] = flatCoords[middleX];
-      drawableCoords[offset + 3] = flatCoords[middleX + 1];
+      drawableCoords[dOffset + 2] = flatCoords[offset + stride];
+      drawableCoords[dOffset + 3] = flatCoords[offset + stride + 1];
       // center of circle coordinates
       const centerOfCircle = this.flatCenterOfCircle(i);
-      drawableCoords[offset + 4] = centerOfCircle[0];
-      drawableCoords[offset + 5] = centerOfCircle[1];
-      offset += 6;
+      drawableCoords[dOffset + 4] = centerOfCircle[0];
+      drawableCoords[dOffset + 5] = centerOfCircle[1];
+      dOffset += 6;
     }
     // trailing end coordinates of the last valid arc
     if (validCount > 0) {
-      // find the last valid arc to get its end point
       for (let i = arcCount - 1; i >= 0; --i) {
-        if (this.arc(i).centerOfCircle()) {
-          const startX = i * stride * 2;
-          const endX = startX + stride * 2;
-          drawableCoords[offset] = flatCoords[endX];
-          drawableCoords[offset + 1] = flatCoords[endX + 1];
+        const offset = i * 2 * stride;
+        const center = getCircleCenter(
+          flatCoords[offset],
+          flatCoords[offset + 1],
+          flatCoords[offset + stride],
+          flatCoords[offset + stride + 1],
+          flatCoords[offset + stride * 2],
+          flatCoords[offset + stride * 2 + 1],
+        );
+        if (center) {
+          const endOffset = offset + stride * 2;
+          drawableCoords[dOffset] = flatCoords[endOffset];
+          drawableCoords[dOffset + 1] = flatCoords[endOffset + 1];
           break;
         }
       }
@@ -184,9 +217,9 @@ class CircularString extends SimpleGeometry {
    * box of the start and end control points.
    * @param {number} arcIndex The arc index.
    * @return {import("../extent.js").Extent} The arc's bounding extent.
-   * @api
+   * @private
    */
-  arcExtent(arcIndex) {
+  arcExtent_(arcIndex) {
     const stride = this.stride;
     const si = arcIndex * 2 * stride;
     const mi = si + stride;
@@ -267,38 +300,44 @@ class CircularString extends SimpleGeometry {
     const stride = this.stride;
     const coords = this.flatCoordinates;
     for (let i = 0, n = this.arcCount(); i < n; i++) {
-      const arc = this.arc(i);
-      const center = arc.centerOfCircle();
+      const offset = i * 2 * stride;
+      const bx = coords[offset];
+      const by = coords[offset + 1];
+      const mx = coords[offset + stride];
+      const my = coords[offset + stride + 1];
+      const ex = coords[offset + stride * 2];
+      const ey = coords[offset + stride * 2 + 1];
+
+      const center = getCircleCenter(bx, by, mx, my, ex, ey);
       if (!center) {
         continue;
       }
-      const radius = arc.radius(center);
-      const angles = arc.angles(center);
-      const cw = arc.clockwise();
-      const dx = x - center.x;
-      const dy = y - center.y;
+      const cx = center[0];
+      const cy = center[1];
+      const radius = getArcRadius(cx, cy, bx, by);
+      const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+      const cw = isArcClockwise(bx, by, mx, my, ex, ey);
+      const dx = x - cx;
+      const dy = y - cy;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // angle of the query point from the circle center
       let queryAngle = Math.atan2(dy, dx);
       if (queryAngle < 0) {
         queryAngle += 2 * Math.PI;
       }
 
-      // check if queryAngle falls within the arc's angular range
       const onArc = this.angleWithinArc_(
         queryAngle,
         angles.startAngle,
         angles.endAngle,
         cw,
-        arc.fullCircle(),
+        isFullCircle(bx, by, ex, ey),
       );
 
       let candidateX, candidateY;
       if (onArc && dist > 0) {
-        // project onto the arc
-        candidateX = center.x + (radius * dx) / dist;
-        candidateY = center.y + (radius * dy) / dist;
+        candidateX = cx + (radius * dx) / dist;
+        candidateY = cy + (radius * dy) / dist;
       } else {
         // closest is one of the endpoints
         const si = i * 2 * stride;
@@ -339,26 +378,30 @@ class CircularString extends SimpleGeometry {
    * @api
    */
   closestPointOnArc(arcIndex, x, y) {
-    const arc = this.arc(arcIndex);
-    const center = arc.centerOfCircle();
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
+    const offset = arcIndex * 2 * stride;
+    const bx = flat[offset];
+    const by = flat[offset + 1];
+    const mx = flat[offset + stride];
+    const my = flat[offset + stride + 1];
+    const ex = flat[offset + stride * 2];
+    const ey = flat[offset + stride * 2 + 1];
+
+    const center = getCircleCenter(bx, by, mx, my, ex, ey);
     if (!center) {
       // degenerate (collinear) arc - closest endpoint
-      const stride = this.stride;
-      const si = arcIndex * 2 * stride;
-      const ei = si + 2 * stride;
-      const sx = this.flatCoordinates[si],
-        sy = this.flatCoordinates[si + 1];
-      const ex = this.flatCoordinates[ei],
-        ey = this.flatCoordinates[ei + 1];
-      const dStart = (x - sx) * (x - sx) + (y - sy) * (y - sy);
+      const dStart = (x - bx) * (x - bx) + (y - by) * (y - by);
       const dEnd = (x - ex) * (x - ex) + (y - ey) * (y - ey);
-      return dStart <= dEnd ? [sx, sy] : [ex, ey];
+      return dStart <= dEnd ? [bx, by] : [ex, ey];
     }
-    const radius = arc.radius(center);
-    const angles = arc.angles(center);
-    const cw = arc.clockwise();
-    const dx = x - center.x;
-    const dy = y - center.y;
+    const cx = center[0];
+    const cy = center[1];
+    const radius = getArcRadius(cx, cy, bx, by);
+    const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+    const cw = isArcClockwise(bx, by, mx, my, ex, ey);
+    const dx = x - cx;
+    const dy = y - cy;
     const dist = Math.sqrt(dx * dx + dy * dy);
     let queryAngle = Math.atan2(dy, dx);
     if (queryAngle < 0) {
@@ -370,23 +413,16 @@ class CircularString extends SimpleGeometry {
         angles.startAngle,
         angles.endAngle,
         cw,
-        arc.fullCircle(),
+        isFullCircle(bx, by, ex, ey),
       ) &&
       dist > 0
     ) {
-      return [center.x + (radius * dx) / dist, center.y + (radius * dy) / dist];
+      return [cx + (radius * dx) / dist, cy + (radius * dy) / dist];
     }
     // outside arc range - closest endpoint
-    const stride2 = this.stride;
-    const si2 = arcIndex * 2 * stride2;
-    const ei2 = si2 + 2 * stride2;
-    const sx2 = this.flatCoordinates[si2],
-      sy2 = this.flatCoordinates[si2 + 1];
-    const ex2 = this.flatCoordinates[ei2],
-      ey2 = this.flatCoordinates[ei2 + 1];
-    const dStart2 = (x - sx2) * (x - sx2) + (y - sy2) * (y - sy2);
-    const dEnd2 = (x - ex2) * (x - ex2) + (y - ey2) * (y - ey2);
-    return dStart2 <= dEnd2 ? [sx2, sy2] : [ex2, ey2];
+    const dStart = (x - bx) * (x - bx) + (y - by) * (y - by);
+    const dEnd = (x - ex) * (x - ex) + (y - ey) * (y - ey);
+    return dStart <= dEnd ? [bx, by] : [ex, ey];
   }
 
   /**
@@ -498,45 +534,51 @@ class CircularString extends SimpleGeometry {
    * @private
    */
   interpolateArc_(arcIndex, fraction, dest) {
-    const arc = this.arc(arcIndex);
-    const center = arc.centerOfCircle();
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
+    const offset = arcIndex * 2 * stride;
+    const bx = flat[offset];
+    const by = flat[offset + 1];
+    const mx = flat[offset + stride];
+    const my = flat[offset + stride + 1];
+    const ex = flat[offset + stride * 2];
+    const ey = flat[offset + stride * 2 + 1];
+
+    const center = getCircleCenter(bx, by, mx, my, ex, ey);
     const result = dest || [0, 0];
     if (!center) {
-      // degenerate arc - linearly interpolate between endpoints
-      result[0] = arc.begin.x + fraction * (arc.end.x - arc.begin.x);
-      result[1] = arc.begin.y + fraction * (arc.end.y - arc.begin.y);
+      result[0] = bx + fraction * (ex - bx);
+      result[1] = by + fraction * (ey - by);
       return result;
     }
-    const radius = arc.radius(center);
+    const cx = center[0];
+    const cy = center[1];
+    const radius = getArcRadius(cx, cy, bx, by);
 
-    if (arc.fullCircle()) {
-      // full circle: start angle -> start angle + 2pi (or -2pi for CW)
-      const startAngle = Math.atan2(
-        arc.begin.y - center.y,
-        arc.begin.x - center.x,
-      );
-      const cw = arc.clockwise();
+    if (isFullCircle(bx, by, ex, ey)) {
+      const startAngle = Math.atan2(by - cy, bx - cx);
+      const cw = isArcClockwise(bx, by, mx, my, ex, ey);
       const angle = cw
         ? startAngle - fraction * 2 * Math.PI
         : startAngle + fraction * 2 * Math.PI;
-      result[0] = center.x + radius * Math.cos(angle);
-      result[1] = center.y + radius * Math.sin(angle);
+      result[0] = cx + radius * Math.cos(angle);
+      result[1] = cy + radius * Math.sin(angle);
       return result;
     }
 
-    const angles = arc.angles(center);
-    const cw = arc.clockwise();
+    const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+    const cw = isArcClockwise(bx, by, mx, my, ex, ey);
     let sweep;
     if (cw) {
-      sweep = arc.angleDistance(angles.endAngle, angles.startAngle);
+      sweep = angleDistance(angles.endAngle, angles.startAngle);
     } else {
-      sweep = arc.angleDistance(angles.startAngle, angles.endAngle);
+      sweep = angleDistance(angles.startAngle, angles.endAngle);
     }
     const angle = cw
       ? angles.startAngle - fraction * sweep
       : angles.startAngle + fraction * sweep;
-    result[0] = center.x + radius * Math.cos(angle);
-    result[1] = center.y + radius * Math.sin(angle);
+    result[0] = cx + radius * Math.cos(angle);
+    result[1] = cy + radius * Math.sin(angle);
     return result;
   }
 
@@ -575,57 +617,43 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
-   * Constructs and returns a CircularArc object for the arc at the given
-   * index.
-   * @private
+   * Returns the flat coordinates [bx, by, mx, my, ex, ey] for the arc
+   * at the given index.
    * @param {number} index The arc's index.
-   * @return {CircularArc} The constructed CircularArc.
+   * @return {Array<number>} The 6-element flat coordinate array.
+   * @private
    */
-  arc(index) {
-    const startX = this.stride * 2 * index;
-    const middleX = startX + this.stride;
-    const endX = startX + this.stride * 2;
-    return new CircularArc(
-      new Vector2(
-        this.flatCoordinates[startX],
-        this.flatCoordinates[startX + 1],
-      ),
-      new Vector2(
-        this.flatCoordinates[middleX],
-        this.flatCoordinates[middleX + 1],
-      ),
-      new Vector2(this.flatCoordinates[endX], this.flatCoordinates[endX + 1]),
-    );
+  getArcCoords_(index) {
+    const stride = this.stride;
+    const offset = stride * 2 * index;
+    const flat = this.flatCoordinates;
+    return [
+      flat[offset],
+      flat[offset + 1],
+      flat[offset + stride],
+      flat[offset + stride + 1],
+      flat[offset + stride * 2],
+      flat[offset + stride * 2 + 1],
+    ];
   }
 
   /**
    * Computes and returns the flat bounding coordinates for the given arc.
    * @private
-   * @param {CircularArc} arc The given arc.
+   * @param {number} bx Begin X.
+   * @param {number} by Begin Y.
+   * @param {number} mx Middle X.
+   * @param {number} my Middle Y.
+   * @param {number} ex End X.
+   * @param {number} ey End Y.
    * @return {Array<number>} The computed bounding coordinates.
    */
-  flatBoundingArcCoordinates(arc) {
-    const boundingCoords = [];
-    const center = arc.centerOfCircle();
+  flatBoundingArcCoordinates(bx, by, mx, my, ex, ey) {
+    const center = getCircleCenter(bx, by, mx, my, ex, ey);
     if (!center) {
-      // degenerate arc - use endpoints as bounding coords
-      return [arc.begin.x, arc.begin.y, arc.end.x, arc.end.y];
+      return [bx, by, ex, ey];
     }
-    const radius = arc.radius(center);
-    const angles = arc.angles(center);
-    const clockwise = arc.clockwise();
-    const coords = arc.boundingCoords(
-      center,
-      radius,
-      angles.startAngle,
-      angles.endAngle,
-      clockwise,
-    );
-    for (let i = 0, ii = coords.length; i < ii; ++i) {
-      boundingCoords.push(coords[i].x);
-      boundingCoords.push(coords[i].y);
-    }
-    return boundingCoords;
+    return getArcBoundingCoords(bx, by, mx, my, ex, ey, center[0], center[1]);
   }
 
   /**
@@ -636,11 +664,20 @@ class CircularString extends SimpleGeometry {
    */
   flatBoundingCoordinates() {
     let boundingCoords = [];
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
     const count = this.arcCount();
     for (let i = 0; i < count; ++i) {
-      const arc = this.arc(i);
+      const offset = i * 2 * stride;
       boundingCoords = boundingCoords.concat(
-        this.flatBoundingArcCoordinates(arc),
+        this.flatBoundingArcCoordinates(
+          flat[offset],
+          flat[offset + 1],
+          flat[offset + stride],
+          flat[offset + stride + 1],
+          flat[offset + stride * 2],
+          flat[offset + stride * 2 + 1],
+        ),
       );
     }
     return boundingCoords;
@@ -671,6 +708,12 @@ class CircularString extends SimpleGeometry {
    * @override
    */
   setCoordinates(coordinates, layout) {
+    assert(
+      !coordinates ||
+        coordinates.length === 0 ||
+        coordinates.length % 2 === 1,
+      `CircularString requires an odd number of points (≥3), got ${coordinates ? coordinates.length : 0}`,
+    );
     this.setLayout(layout, coordinates, 1);
     if (!this.flatCoordinates) {
       this.flatCoordinates = [];
@@ -686,28 +729,30 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
-   * Call the callback for each arc (3 control points: start, mid, end).
-   * If the callback returns a truthy value, the function returns that value
-   * immediately. Otherwise the function returns `false`.
-   * @param {function(import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate): T} callback
-   *     Function called for each arc with (start, mid, end).
+   * Call the callback for each arc with flat scalar coordinates.
+   * If the callback returns a truthy value, iteration stops and that value
+   * is returned. Otherwise the function returns `false`.
+   * @param {function(number, number, number, number, number, number, number): T} callback
+   *     Function called for each arc with (bx, by, mx, my, ex, ey, index).
    * @return {T|boolean} Value.
    * @template T
    * @api
    */
   forEachArc(callback) {
-    const flatCoordinates = this.flatCoordinates;
+    const flat = this.flatCoordinates;
     const stride = this.stride;
     const count = this.arcCount();
     for (let i = 0; i < count; i++) {
       const offset = i * 2 * stride;
-      const start = flatCoordinates.slice(offset, offset + stride);
-      const mid = flatCoordinates.slice(offset + stride, offset + 2 * stride);
-      const end = flatCoordinates.slice(
-        offset + 2 * stride,
-        offset + 3 * stride,
+      const ret = callback(
+        flat[offset],
+        flat[offset + 1],
+        flat[offset + stride],
+        flat[offset + stride + 1],
+        flat[offset + stride * 2],
+        flat[offset + stride * 2 + 1],
+        i,
       );
-      const ret = callback(start, mid, end);
       if (ret) {
         return ret;
       }
@@ -769,15 +814,23 @@ class CircularString extends SimpleGeometry {
       [extent[0], extent[3], extent[0], extent[1]], // left
     ];
     for (let i = 0, n = this.arcCount(); i < n; i++) {
-      const arc = this.arc(i);
-      const center = arc.centerOfCircle();
+      const offset = i * 2 * stride;
+      const abx = coords[offset];
+      const aby = coords[offset + 1];
+      const amx = coords[offset + stride];
+      const amy = coords[offset + stride + 1];
+      const aex = coords[offset + stride * 2];
+      const aey = coords[offset + stride * 2 + 1];
+      const center = getCircleCenter(abx, aby, amx, amy, aex, aey);
       if (!center) {
         continue;
       }
-      const radius = arc.radius(center);
-      const angles = arc.angles(center);
-      const cw = arc.clockwise();
-      const full = arc.fullCircle();
+      const cx = center[0];
+      const cy = center[1];
+      const radius = getArcRadius(cx, cy, abx, aby);
+      const angles = getArcAngles(cx, cy, abx, aby, amx, amy, aex, aey);
+      const cw = isArcClockwise(abx, aby, amx, amy, aex, aey);
+      const full = isFullCircle(abx, aby, aex, aey);
       for (let e = 0; e < 4; e++) {
         if (
           this.arcIntersectsSegment_(
@@ -811,7 +864,7 @@ class CircularString extends SimpleGeometry {
 
   /**
    * Checks whether a circular arc intersects a line segment.
-   * @param {import("./flat/CircularArc.js").Vector2} center Circle center.
+   * @param {Array<number>} center Circle center [cx, cy].
    * @param {number} radius Circle radius.
    * @param {number} startAngle Arc start angle.
    * @param {number} endAngle Arc end angle.
@@ -836,12 +889,12 @@ class CircularString extends SimpleGeometry {
     x2,
     y2,
   ) {
-    // Line segment: P = P1 + t*(P2-P1), t in [0,1]
-    // Circle: (x-cx)^2 + (y-cy)^2 = r^2
+    const cx = center[0];
+    const cy = center[1];
     const dx = x2 - x1;
     const dy = y2 - y1;
-    const fx = x1 - center.x;
-    const fy = y1 - center.y;
+    const fx = x1 - cx;
+    const fy = y1 - cy;
     const a = dx * dx + dy * dy;
     const b = 2 * (fx * dx + fy * dy);
     const c = fx * fx + fy * fy - radius * radius;
@@ -853,10 +906,9 @@ class CircularString extends SimpleGeometry {
     for (const sign of [-1, 1]) {
       const t = (-b + sign * discriminant) / (2 * a);
       if (t >= 0 && t <= 1) {
-        // intersection point on the line segment - check if on the arc
         const ix = x1 + t * dx;
         const iy = y1 + t * dy;
-        let angle = Math.atan2(iy - center.y, ix - center.x);
+        let angle = Math.atan2(iy - cy, ix - cx);
         if (angle < 0) {
           angle += 2 * Math.PI;
         }
@@ -933,23 +985,35 @@ class CircularString extends SimpleGeometry {
    * @private
    */
   arcLength_(arcIndex) {
-    const arc = this.arc(arcIndex);
-    const center = arc.centerOfCircle();
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
+    const offset = arcIndex * 2 * stride;
+    const bx = flat[offset];
+    const by = flat[offset + 1];
+    const mx = flat[offset + stride];
+    const my = flat[offset + stride + 1];
+    const ex = flat[offset + stride * 2];
+    const ey = flat[offset + stride * 2 + 1];
+
+    const center = getCircleCenter(bx, by, mx, my, ex, ey);
     if (!center) {
-      // degenerate arc - return straight-line distance
-      return arc.begin.distance(arc.end);
+      const dx = ex - bx;
+      const dy = ey - by;
+      return Math.sqrt(dx * dx + dy * dy);
     }
-    const radius = arc.radius(center);
-    if (arc.fullCircle()) {
+    const cx = center[0];
+    const cy = center[1];
+    const radius = getArcRadius(cx, cy, bx, by);
+    if (isFullCircle(bx, by, ex, ey)) {
       return 2 * Math.PI * radius;
     }
-    const angles = arc.angles(center);
-    const cw = arc.clockwise();
+    const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+    const cw = isArcClockwise(bx, by, mx, my, ex, ey);
     let sweep;
     if (cw) {
-      sweep = arc.angleDistance(angles.endAngle, angles.startAngle);
+      sweep = angleDistance(angles.endAngle, angles.startAngle);
     } else {
-      sweep = arc.angleDistance(angles.startAngle, angles.endAngle);
+      sweep = angleDistance(angles.startAngle, angles.endAngle);
     }
     return radius * sweep;
   }
@@ -968,36 +1032,44 @@ class CircularString extends SimpleGeometry {
     if (count === 0) {
       return [];
     }
+    const flat = this.flatCoordinates;
+    const stride = this.stride;
     const coords = [];
     for (let i = 0; i < count; i++) {
-      const arc = this.arc(i);
-      const center = arc.centerOfCircle();
+      const offset = i * 2 * stride;
+      const bx = flat[offset];
+      const by = flat[offset + 1];
+      const mx = flat[offset + stride];
+      const my = flat[offset + stride + 1];
+      const ex = flat[offset + stride * 2];
+      const ey = flat[offset + stride * 2 + 1];
+
+      const center = getCircleCenter(bx, by, mx, my, ex, ey);
       if (!center) {
         // degenerate arc - emit straight line endpoints
         if (i === 0) {
-          coords.push(arc.begin.x, arc.begin.y);
+          coords.push(bx, by);
         }
-        coords.push(arc.end.x, arc.end.y);
+        coords.push(ex, ey);
         continue;
       }
-      const radius = arc.radius(center);
-      const angles = arc.angles(center);
-      const cw = arc.clockwise();
-      const full = arc.fullCircle();
+      const cx = center[0];
+      const cy = center[1];
+      const radius = getArcRadius(cx, cy, bx, by);
+      const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+      const cw = isArcClockwise(bx, by, mx, my, ex, ey);
+      const full = isFullCircle(bx, by, ex, ey);
       const startAngle = angles.startAngle;
       let sweep;
       if (full) {
         sweep = 2 * Math.PI;
       } else if (cw) {
-        sweep = -arc.angleDistance(angles.endAngle, angles.startAngle);
+        sweep = -angleDistance(angles.endAngle, angles.startAngle);
       } else {
-        sweep = arc.angleDistance(angles.startAngle, angles.endAngle);
+        sweep = angleDistance(angles.startAngle, angles.endAngle);
       }
       // Compute the tessellation step closest to the through-point so we
-      // can replace it with the exact control-point coordinate.  This
-      // ensures downstream consumers (Snap vertex detection, hit-testing)
-      // see the through-point as an exact tessellated vertex without
-      // introducing a competing nearby point.
+      // can replace it with the exact control-point coordinate.
       let midStep = -1;
       if (!full) {
         const midAngle = angles.middleAngle;
@@ -1013,31 +1085,109 @@ class CircularString extends SimpleGeometry {
         }
         midStep = Math.round((midOffset / sweep) * numSeg);
         if (midStep <= 0 || midStep >= numSeg) {
-          midStep = -1; // coincides with start/end, skip replacement
+          midStep = -1;
         }
       }
       const startJ = i === 0 ? 0 : 1;
       for (let j = startJ; j <= numSeg; j++) {
         if (j === 0) {
-          // Exact start-point control coordinate (avoids trig round-trip)
-          coords.push(arc.begin.x, arc.begin.y);
+          coords.push(bx, by);
         } else if (j === numSeg) {
-          // Exact end-point control coordinate
-          coords.push(arc.end.x, arc.end.y);
+          coords.push(ex, ey);
         } else if (j === midStep) {
-          // Exact through-point control coordinate
-          coords.push(arc.middle.x, arc.middle.y);
+          coords.push(mx, my);
         } else {
           const frac = j / numSeg;
           const angle = startAngle + sweep * frac;
           coords.push(
-            center.x + radius * Math.cos(angle),
-            center.y + radius * Math.sin(angle),
+            cx + radius * Math.cos(angle),
+            cy + radius * Math.sin(angle),
           );
         }
       }
     }
     return coords;
+  }
+
+  /**
+   * Returns tessellated flat coordinate data suitable for topology operations.
+   * This provides the bridge between curve geometry and flat-coordinate
+   * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).
+   *
+   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * @return {{flatCoordinates: Array<number>, ends: Array<number>, stride: number}}
+   *   Tessellated flat coordinates with end indices and stride.
+   * @api
+   */
+  getTessellatedFlatData(pointsPerArc) {
+    const flatCoordinates = this.tessellate(pointsPerArc);
+    return {
+      flatCoordinates,
+      ends: [flatCoordinates.length],
+      stride: 2,
+    };
+  }
+
+  /**
+   * Find the index of a control point matching the given coordinate.
+   * @param {import("../coordinate.js").Coordinate} coord The coordinate to find.
+   * @param {boolean} [lastMatch] If true, return the last occurrence
+   *   (e.g., index n-1 for closed rings exit). If false, return the first
+   *   occurrence (canonical index 0 for closed rings entry).
+   * @return {number} The coordinate index (even-indexed endpoints only), or -1 if not found.
+   * @api
+   */
+  findArcEndpointIndex(coord, lastMatch) {
+    const stride = this.stride;
+    const flat = this.flatCoordinates;
+    const numPoints = flat.length / stride;
+    const cx = coord[0];
+    const cy = coord[1];
+    const TOLERANCE = 1e-6;
+
+    let found = -1;
+    for (let i = 0; i < numPoints; i += 2) {
+      const offset = i * stride;
+      const dx = flat[offset] - cx;
+      const dy = flat[offset + 1] - cy;
+      if (dx * dx + dy * dy < TOLERANCE * TOLERANCE) {
+        if (!lastMatch) {
+          return i;
+        }
+        found = i;
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Return a new CircularString containing the control points from
+   * `startIdx` to `endIdx` (inclusive), handling wrap-around for closed rings.
+   * Both indices must be even (arc endpoints).
+   * @param {number} startIdx Start index (must be even).
+   * @param {number} endIdx End index (must be even).
+   * @return {CircularString} The sliced sub-arc.
+   * @api
+   */
+  subArc(startIdx, endIdx) {
+    const coords = this.getCoordinates();
+    const n = coords.length;
+    let slice;
+    if (startIdx <= endIdx) {
+      slice = coords.slice(startIdx, endIdx + 1);
+    } else {
+      // Wrap-around: take from startIdx to end, then from beginning to endIdx
+      // For closed rings, skip the duplicate closing point
+      const isClosed =
+        n >= 3 &&
+        Math.abs(coords[0][0] - coords[n - 1][0]) < 1e-6 &&
+        Math.abs(coords[0][1] - coords[n - 1][1]) < 1e-6;
+      const wrapEnd = isClosed ? n - 1 : n;
+      slice = coords
+        .slice(startIdx, wrapEnd)
+        .concat(coords.slice(0, endIdx + 1));
+    }
+    return new CircularString(slice, this.layout);
   }
 }
 

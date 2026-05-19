@@ -156,6 +156,14 @@ const GEOMETRY_SEGMENTERS = {
   },
 
   /**
+   * @param {import("../geom/LinearRing.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  LinearRing(geometry) {
+    return this.LineString(geometry);
+  },
+
+  /**
    * @param {import("../geom/MultiLineString.js").default} geometry Geometry.
    * @return {Array<Segment>} Segments
    */

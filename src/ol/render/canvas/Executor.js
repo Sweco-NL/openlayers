@@ -4,7 +4,11 @@
 import {equals} from '../../array.js';
 import {distance} from '../../coordinate.js';
 import {createEmpty, createOrUpdate, intersects} from '../../extent.js';
-import {CircularArc, Vector2} from '../../geom/flat/CircularArc.js';
+import {
+  getArcAngles,
+  isArcClockwise,
+  isFullCircle,
+} from '../../geom/flat/arc.js';
 import {lineStringLength} from '../../geom/flat/length.js';
 import {
   offsetLineString,
@@ -163,24 +167,19 @@ function drawArcs(context, pixelCoordinates, start, end, moveTo) {
     endX = pixelCoordinates[start + 6];
     endY = pixelCoordinates[start + 7];
 
-    const arc = new CircularArc(
-      new Vector2(beginX, beginY),
-      new Vector2(middleX, middleY),
-      new Vector2(endX, endY),
-    );
-    const fullCircle = arc.fullCircle();
+    const isClosedCircle = isFullCircle(beginX, beginY, endX, endY);
     const radius = distance(
       [beginX, beginY],
       [centerOfCircleX, centerOfCircleY],
     );
 
     if (moveTo && arcIndex === 0) {
-      const moveToX = fullCircle ? centerOfCircleX + radius : beginX;
-      const moveToY = fullCircle ? centerOfCircleY : beginY;
+      const moveToX = isClosedCircle ? centerOfCircleX + radius : beginX;
+      const moveToY = isClosedCircle ? centerOfCircleY : beginY;
       context.moveTo(moveToX, moveToY);
     }
 
-    if (fullCircle) {
+    if (isClosedCircle) {
       context.arc(
         centerOfCircleX,
         centerOfCircleY,
@@ -190,14 +189,23 @@ function drawArcs(context, pixelCoordinates, start, end, moveTo) {
         true,
       );
     } else {
-      const angles = arc.angles(new Vector2(centerOfCircleX, centerOfCircleY));
+      const angles = getArcAngles(
+        centerOfCircleX,
+        centerOfCircleY,
+        beginX,
+        beginY,
+        middleX,
+        middleY,
+        endX,
+        endY,
+      );
       context.arc(
         centerOfCircleX,
         centerOfCircleY,
         radius,
         angles.startAngle,
         angles.endAngle,
-        arc.clockwise(),
+        isArcClockwise(beginX, beginY, middleX, middleY, endX, endY),
       );
     }
   }

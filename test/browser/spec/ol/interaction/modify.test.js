@@ -2441,6 +2441,168 @@ describe('ol.interaction.Modify', function () {
         expect(ringCoords[1][1]).to.be(25);
         done();
       });
+
+      it('co-grabs shared vertex across two CurvePolygon features', function (done) {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const ringB = new CircularString([
+          [10, 0],
+          [15, 5],
+          [20, 0],
+          [15, -5],
+          [10, 0],
+        ]);
+
+        const featureA = new Feature(new CurvePolygon([ringA]));
+        const featureB = new Feature(new CurvePolygon([ringB]));
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, featureB]);
+
+        const modify = new Modify({source: source});
+        map.addInteraction(modify);
+
+        const revA = featureA.getGeometry().getRevision();
+        const revB = featureB.getGeometry().getRevision();
+
+        // Drag shared vertex [10, 0] to [12, 2]
+        simulateEvent('pointermove', 10, 0, null, 0);
+        simulateEvent('pointerdown', 10, 0, null, 0);
+        simulateEvent('pointermove', 12, -2, null, 0);
+        simulateEvent('pointerdrag', 12, -2, null, 0);
+        simulateEvent('pointerup', 12, -2, null, 0);
+
+        expect(featureA.getGeometry().getRevision()).to.be.greaterThan(revA);
+        expect(featureB.getGeometry().getRevision()).to.be.greaterThan(revB);
+
+        const coordsA = featureA
+          .getGeometry()
+          .getRingsArray()[0]
+          .getCoordinates();
+        const coordsB = featureB
+          .getGeometry()
+          .getRingsArray()[0]
+          .getCoordinates();
+
+        expect(coordsA[2][0]).to.be(12);
+        expect(coordsA[2][1]).to.be(2);
+        expect(coordsB[0][0]).to.be(12);
+        expect(coordsB[0][1]).to.be(2);
+        expect(coordsB[4][0]).to.be(12);
+        expect(coordsB[4][1]).to.be(2);
+
+        done();
+      });
+
+      it('modifyend includes both co-grabbed CurvePolygon features', function (done) {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const ringB = new CircularString([
+          [10, 0],
+          [15, 5],
+          [20, 0],
+          [15, -5],
+          [10, 0],
+        ]);
+
+        const featureA = new Feature(new CurvePolygon([ringA]));
+        const featureB = new Feature(new CurvePolygon([ringB]));
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, featureB]);
+
+        const modify = new Modify({source: source});
+        map.addInteraction(modify);
+
+        let modifyEndFeatures = null;
+        modify.on('modifyend', function (event) {
+          modifyEndFeatures = event.features.getArray();
+        });
+
+        simulateEvent('pointermove', 10, 0, null, 0);
+        simulateEvent('pointerdown', 10, 0, null, 0);
+        simulateEvent('pointermove', 12, -2, null, 0);
+        simulateEvent('pointerdrag', 12, -2, null, 0);
+        simulateEvent('pointerup', 12, -2, null, 0);
+
+        expect(modifyEndFeatures).to.not.be(null);
+        expect(modifyEndFeatures).to.contain(featureA);
+        expect(modifyEndFeatures).to.contain(featureB);
+
+        done();
+      });
+
+      it('shows vertexFeature on LineString edge within CompoundCurve ring', function () {
+        const ring = new CompoundCurve([
+          new CircularString([
+            [0, 0],
+            [15, 20],
+            [30, 0],
+          ]),
+          new LineString([
+            [30, 0],
+            [30, -40],
+            [0, -40],
+            [0, 0],
+          ]),
+        ]);
+        const feature = new Feature(new CurvePolygon([ring]));
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        // hover over the LineString edge midpoint at [30, -20] (pixel offset 30, 20)
+        // This is 20 pixels from both endpoints [30,0] and [30,-40], well
+        // outside the 10px pixelTolerance for snapping to vertex.
+        simulateEvent('pointermove', 30, 20, null, 0);
+        expect(modify.vertexFeature_).to.not.be(null);
+        expect(modify.vertexFeature_.get('existing')).to.be(false);
+
+        map.removeInteraction(modify);
+      });
+
+      it('filter excludes _snapPoint features from RBush', function () {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const featureA = new Feature(new CurvePolygon([ringA]));
+
+        const snapPointFeature = new Feature(new Point([10, 0]));
+        snapPointFeature.set('_snapPoint', true);
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, snapPointFeature]);
+
+        const modify = new Modify({
+          source: source,
+          filter: (feature) => !feature.get('_snapPoint'),
+        });
+        map.addInteraction(modify);
+
+        const rbushEntries = modify.rBush_.getAll();
+        const featuresInRBush = new Set(rbushEntries.map((e) => e.feature));
+
+        expect(featuresInRBush.has(featureA)).to.be(true);
+        expect(featuresInRBush.has(snapPointFeature)).to.be(false);
+      });
     });
   });
 });

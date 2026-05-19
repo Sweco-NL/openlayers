@@ -174,6 +174,18 @@ const DrawEventType = {
    * @api
    */
   DRAWABORT: 'drawabort',
+  /**
+   * Triggered when tracing along an existing feature begins
+   * @event DrawEvent#tracestart
+   * @api
+   */
+  TRACESTART: 'tracestart',
+  /**
+   * Triggered when tracing along an existing feature ends
+   * @event DrawEvent#traceend
+   * @api
+   */
+  TRACEEND: 'traceend',
 };
 
 /**
@@ -185,8 +197,9 @@ export class DrawEvent extends Event {
   /**
    * @param {DrawEventType} type Type.
    * @param {Feature} feature The feature drawn.
+   * @param {import("../coordinate.js").Coordinate} [opt_coordinate] Coordinate associated with the event.
    */
-  constructor(type, feature) {
+  constructor(type, feature, opt_coordinate) {
     super(type);
 
     /**
@@ -195,6 +208,13 @@ export class DrawEvent extends Event {
      * @api
      */
     this.feature = feature;
+
+    /**
+     * The coordinate associated with this event (e.g. trace start/end coordinate).
+     * @type {import("../coordinate.js").Coordinate|undefined}
+     * @api
+     */
+    this.coordinate = opt_coordinate;
   }
 }
 
@@ -756,7 +776,15 @@ class Draw extends PointerInteraction {
    * @private
    */
   deactivateTrace_() {
-    this.traceState_ = {active: false};
+    if (this.traceState_.active) {
+      const coord = this.traceState_.startCoord;
+      this.traceState_ = {active: false};
+      this.dispatchEvent(
+        new DrawEvent(DrawEventType.TRACEEND, this.sketchFeature_, coord),
+      );
+    } else {
+      this.traceState_ = {active: false};
+    }
   }
 
   /**
@@ -797,6 +825,13 @@ class Draw extends PointerInteraction {
         targets: targets,
         targetIndex: -1,
       };
+      this.dispatchEvent(
+        new DrawEvent(
+          DrawEventType.TRACESTART,
+          this.sketchFeature_,
+          event.coordinate.slice(),
+        ),
+      );
     }
   }
 
