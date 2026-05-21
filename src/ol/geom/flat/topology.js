@@ -62,7 +62,7 @@ export function getSelfIntersectionPoint(
     return undefined;
   }
 
-  for (let i = 0; i < numSegments; i++) {
+  for (let i = 0; i < numSegments; ++i) {
     const i0 = offset + i * stride;
     const ax = flatCoordinates[i0];
     const ay = flatCoordinates[i0 + 1];
@@ -70,7 +70,7 @@ export function getSelfIntersectionPoint(
     const by = flatCoordinates[i0 + stride + 1];
 
     // Start at i + 2 to skip the adjacent segment (shares vertex with seg i)
-    for (let j = i + 2; j < numSegments; j++) {
+    for (let j = i + 2; j < numSegments; ++j) {
       // For rings, skip the pair (first, last) — they share the closure vertex
       if (isRing && i === 0 && j === numSegments - 1) {
         continue;
@@ -178,6 +178,10 @@ export function getLineArcCrossingPoint(
   const fy = y1 - cy;
 
   const a = dx * dx + dy * dy;
+  if (a < 1e-20) {
+    // Degenerate zero-length line segment
+    return null;
+  }
   const b = 2 * (fx * dx + fy * dy);
   const c = fx * fx + fy * fy - r * r;
   const disc = b * b - 4 * a * c;

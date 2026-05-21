@@ -245,6 +245,9 @@ const GEOMETRY_SEGMENTERS = {
     /** @type {Array<Segment>} */
     const segments = [];
     const coords = geometry.tessellate();
+    if (!coords || coords.length < 4) {
+      return segments;
+    }
     for (let i = 0, ii = coords.length - 2; i < ii; i += 2) {
       segments.push([coords.slice(i, i + 2), coords.slice(i + 2, i + 4)]);
     }

@@ -76,6 +76,24 @@ class CurvePolygon extends Geometry {
 
     /**
      * @private
+     * @type {number}
+     */
+    this.flatCoordinatesRevision_ = -1;
+
+    /**
+     * @private
+     * @type {Array<number>}
+     */
+    this.flatCoordinates_ = null;
+
+    /**
+     * @private
+     * @type {Array<number>}
+     */
+    this.ends_ = null;
+
+    /**
+     * @private
      * @type {Array<CurveRing>}
      */
     this.rings_ = rings || [];
@@ -181,15 +199,10 @@ class CurvePolygon extends Geometry {
    * @return {Array<number>} Flat coordinates.
    */
   getFlatCoordinates() {
-    const flatCoordinates = [];
-    const rings = this.rings_;
-    for (let i = 0, ii = rings.length; i < ii; ++i) {
-      const ringFlat = rings[i].getFlatCoordinates();
-      for (let j = 0, jj = ringFlat.length; j < jj; ++j) {
-        flatCoordinates.push(ringFlat[j]);
-      }
+    if (this.flatCoordinatesRevision_ !== this.getRevision()) {
+      this.computeFlatCoordinatesAndEnds_();
     }
-    return flatCoordinates;
+    return this.flatCoordinates_;
   }
 
   /**
@@ -198,14 +211,32 @@ class CurvePolygon extends Geometry {
    * @api
    */
   getEnds() {
+    if (this.flatCoordinatesRevision_ !== this.getRevision()) {
+      this.computeFlatCoordinatesAndEnds_();
+    }
+    return this.ends_;
+  }
+
+  /**
+   * Compute and cache flat coordinates and ends arrays.
+   * @private
+   */
+  computeFlatCoordinatesAndEnds_() {
+    const flatCoordinates = [];
     const ends = [];
     const rings = this.rings_;
     let offset = 0;
     for (let i = 0, ii = rings.length; i < ii; ++i) {
-      offset += rings[i].getFlatCoordinates().length;
+      const ringFlat = rings[i].getFlatCoordinates();
+      for (let j = 0, jj = ringFlat.length; j < jj; ++j) {
+        flatCoordinates.push(ringFlat[j]);
+      }
+      offset += ringFlat.length;
       ends.push(offset);
     }
-    return ends;
+    this.flatCoordinates_ = flatCoordinates;
+    this.ends_ = ends;
+    this.flatCoordinatesRevision_ = this.getRevision();
   }
 
   /**
@@ -278,14 +309,14 @@ class CurvePolygon extends Geometry {
         /** @type {import("./CompoundCurve.js").default} */ (ring);
       const coords = [];
       const geoms = compoundCurve.getGeometriesArray();
-      for (let i = 0; i < geoms.length; i++) {
+      for (let i = 0, ii = geoms.length; i < ii; ++i) {
         const subCoords = this.getTessellatedRingCoords_(
           geoms[i],
           pointsPerArc,
         );
         // skip the first point of subsequent sub-geometries (junction dedup)
         const start = i > 0 ? 2 : 0;
-        for (let j = start; j < subCoords.length; j++) {
+        for (let j = start, jj = subCoords.length; j < jj; ++j) {
           coords.push(subCoords[j]);
         }
       }
@@ -298,7 +329,7 @@ class CurvePolygon extends Geometry {
       return flat;
     }
     const coords = [];
-    for (let i = 0; i < flat.length; i += stride) {
+    for (let i = 0, ii = flat.length; i < ii; i += stride) {
       coords.push(flat[i], flat[i + 1]);
     }
     return coords;
@@ -315,7 +346,7 @@ class CurvePolygon extends Geometry {
     let offset = 0;
     for (let i = 0, ii = this.rings_.length; i < ii; ++i) {
       const tessellated = this.getTessellatedRingCoords_(this.rings_[i]);
-      for (let j = 0; j < tessellated.length; j++) {
+      for (let j = 0, jj = tessellated.length; j < jj; ++j) {
         flatCoordinates.push(tessellated[j]);
       }
       offset += tessellated.length;
@@ -756,7 +787,7 @@ class CurvePolygon extends Geometry {
     for (let i = 0, ii = this.rings_.length; i < ii; ++i) {
       const ring = this.rings_[i];
       const ringCoords = this.getTessellatedRingCoords_(ring, pointsPerArc);
-      for (let j = 0; j < ringCoords.length; j++) {
+      for (let j = 0, jj = ringCoords.length; j < jj; ++j) {
         coords.push(ringCoords[j]);
       }
     }

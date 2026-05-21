@@ -304,7 +304,7 @@ export function getArcBoundingCoords(bx, by, mx, my, ex, ey, cx, cy) {
     startToEnd = 2 * Math.PI - startToEnd;
   }
 
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 4; ++i) {
     const extremeAngle = angleFromOrigin(
       cx,
       cy,

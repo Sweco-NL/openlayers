@@ -1885,25 +1885,69 @@ class Modify extends PointerInteraction {
           circumferenceSegmentData,
         );
       } else if (geometry.getType() === 'CircularString') {
-        const csExtent = geometry.getExtent().slice();
+        // Recompute per-arc extents for all segments of this CircularString.
+        // Moving any control point can affect adjacent arcs' geometry.
         const csCoords = geometry.getCoordinates();
-        for (let j = 0; j < csCoords.length; ++j) {
-          csExtent[0] = Math.min(csExtent[0], csCoords[j][0]);
-          csExtent[1] = Math.min(csExtent[1], csCoords[j][1]);
-          csExtent[2] = Math.max(csExtent[2], csCoords[j][0]);
-          csExtent[3] = Math.max(csExtent[3], csCoords[j][1]);
-        }
-        // update ALL segments of this CircularString, not just the
-        // dragged one, because moving any control point changes the
-        // full geometry extent that all segments share.
         if (segmentData.featureSegments) {
           for (const sd of segmentData.featureSegments) {
-            if (this.rBush_.has(sd)) {
-              this.rBush_.update(csExtent, sd);
+            if (!this.rBush_.has(sd)) {
+              continue;
             }
+            const arcIdx = Math.floor(sd.index / 2);
+            const ai = arcIdx * 2;
+            if (ai + 2 >= csCoords.length) {
+              continue;
+            }
+            const ab = csCoords[ai],
+              am = csCoords[ai + 1],
+              ae = csCoords[ai + 2];
+            const ac = getCircleCenter(
+              ab[0],
+              ab[1],
+              am[0],
+              am[1],
+              ae[0],
+              ae[1],
+            );
+            let ext;
+            if (ac) {
+              const bc = getArcBoundingCoords(
+                ab[0],
+                ab[1],
+                am[0],
+                am[1],
+                ae[0],
+                ae[1],
+                ac[0],
+                ac[1],
+              );
+              let minX = Infinity,
+                minY = Infinity,
+                maxX = -Infinity,
+                maxY = -Infinity;
+              for (let b = 0, bb = bc.length; b < bb; b += 2) {
+                minX = Math.min(minX, bc[b]);
+                minY = Math.min(minY, bc[b + 1]);
+                maxX = Math.max(maxX, bc[b]);
+                maxY = Math.max(maxY, bc[b + 1]);
+              }
+              minX = Math.min(minX, ab[0], am[0], ae[0]);
+              minY = Math.min(minY, ab[1], am[1], ae[1]);
+              maxX = Math.max(maxX, ab[0], am[0], ae[0]);
+              maxY = Math.max(maxY, ab[1], am[1], ae[1]);
+              ext = [minX, minY, maxX, maxY];
+            } else {
+              ext = [
+                Math.min(ab[0], am[0], ae[0]),
+                Math.min(ab[1], am[1], ae[1]),
+                Math.max(ab[0], am[0], ae[0]),
+                Math.max(ab[1], am[1], ae[1]),
+              ];
+            }
+            this.rBush_.update(ext, sd);
           }
         } else if (this.rBush_.has(segmentData)) {
-          this.rBush_.update(csExtent, segmentData);
+          this.rBush_.update(geometry.getExtent(), segmentData);
         }
       } else {
         this.rBush_.update(boundingExtent(segmentData.segment), segmentData);

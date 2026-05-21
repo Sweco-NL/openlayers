@@ -287,14 +287,18 @@ function appendGeometryTraceTargets(coordinate, geometry, targets) {
   }
   if (geometry instanceof CompoundCurve) {
     const tessellated = geometry.tessellate();
-    const coords = flatToCoordinates_(tessellated);
-    appendTraceTarget(coordinate, coords, false, targets);
+    if (tessellated && tessellated.length >= 4) {
+      const coords = flatToCoordinates_(tessellated);
+      appendTraceTarget(coordinate, coords, false, targets);
+    }
     return;
   }
   if (geometry instanceof CircularString) {
     const tessellated = geometry.tessellate();
-    const coords = flatToCoordinates_(tessellated);
-    appendTraceTarget(coordinate, coords, false, targets);
+    if (tessellated && tessellated.length >= 4) {
+      const coords = flatToCoordinates_(tessellated);
+      appendTraceTarget(coordinate, coords, false, targets);
+    }
     return;
   }
   if (geometry instanceof GeometryCollection) {

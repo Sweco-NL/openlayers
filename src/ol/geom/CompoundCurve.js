@@ -83,6 +83,18 @@ class CompoundCurve extends Geometry {
      */
     this.stride_ = 2;
 
+    /**
+     * @private
+     * @type {number}
+     */
+    this.flatCoordinatesRevision_ = -1;
+
+    /**
+     * @private
+     * @type {Array<number>}
+     */
+    this.flatCoordinates_ = null;
+
     this.init_(layout);
     this.listenGeometriesChange_();
   }
@@ -160,18 +172,22 @@ class CompoundCurve extends Geometry {
    * @return {Array<number>} Flat coordinates.
    */
   getFlatCoordinates() {
-    const flatCoordinates = [];
-    const geometries = this.geometries_;
-    const stride = this.stride_;
-    for (let i = 0, ii = geometries.length; i < ii; ++i) {
-      const geomFlat = geometries[i].getFlatCoordinates();
-      // skip the first coordinate of subsequent sub-geometries (junction dedup)
-      const start = i > 0 ? stride : 0;
-      for (let j = start, jj = geomFlat.length; j < jj; ++j) {
-        flatCoordinates.push(geomFlat[j]);
+    if (this.flatCoordinatesRevision_ !== this.getRevision()) {
+      const flatCoordinates = [];
+      const geometries = this.geometries_;
+      const stride = this.stride_;
+      for (let i = 0, ii = geometries.length; i < ii; ++i) {
+        const geomFlat = geometries[i].getFlatCoordinates();
+        // skip the first coordinate of subsequent sub-geometries (junction dedup)
+        const start = i > 0 ? stride : 0;
+        for (let j = start, jj = geomFlat.length; j < jj; ++j) {
+          flatCoordinates.push(geomFlat[j]);
+        }
       }
+      this.flatCoordinates_ = flatCoordinates;
+      this.flatCoordinatesRevision_ = this.getRevision();
     }
-    return flatCoordinates;
+    return this.flatCoordinates_;
   }
 
   /**
@@ -327,7 +343,7 @@ class CompoundCurve extends Geometry {
     // compute cumulative sub-geometry lengths
     const lengths = new Array(n);
     let totalLength = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n; ++i) {
       lengths[i] = geometries[i].getLength();
       totalLength += lengths[i];
     }
@@ -336,7 +352,7 @@ class CompoundCurve extends Geometry {
     }
     const target = fraction * totalLength;
     let cumulative = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n; ++i) {
       if (cumulative + lengths[i] >= target || i === n - 1) {
         const localFraction =
           lengths[i] > 0 ? (target - cumulative) / lengths[i] : 0;
@@ -640,7 +656,7 @@ class CompoundCurve extends Geometry {
         ).tessellate(pointsPerArc);
         // skip duplicate junction with previous sub-geometry
         const start = i > 0 && sub.length >= 2 ? 2 : 0;
-        for (let j = start; j < sub.length; j++) {
+        for (let j = start, jj = sub.length; j < jj; ++j) {
           coords.push(sub[j]);
         }
       } else {
@@ -648,7 +664,7 @@ class CompoundCurve extends Geometry {
         const flat = geom.getFlatCoordinates();
         const stride = geom.getStride();
         const start = i > 0 ? stride : 0;
-        for (let j = start; j < flat.length; j += stride) {
+        for (let j = start, jj = flat.length; j < jj; j += stride) {
           coords.push(flat[j], flat[j + 1]);
         }
       }

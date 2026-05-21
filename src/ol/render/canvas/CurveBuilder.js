@@ -57,7 +57,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
       beginPathInstruction,
     );
     this.instructions.push(beginPathInstruction);
-    this.appendCircularStringInstruction(
+    this.appendCircularStringInstruction_(
       circularStringGeometry.getDrawableFlatCoordinates(),
     );
     this.instructions.push(strokeInstruction);
@@ -96,7 +96,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
       beginPathInstruction,
     );
     this.instructions.push(beginPathInstruction);
-    this.appendCompoundCurveInstructions(compoundCurveGeometry);
+    this.appendCompoundCurveInstructions_(compoundCurveGeometry);
     this.instructions.push(strokeInstruction);
     this.hitDetectionInstructions.push(strokeInstruction);
     this.endGeometry(feature);
@@ -125,7 +125,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
       CanvasInstruction.SET_FILL_STYLE,
       defaultFillStyle,
     ]);
-    this.appendCurvePolygonInstructions(curvePolygonGeometry);
+    this.appendCurvePolygonInstructions_(curvePolygonGeometry);
     this.endGeometry(feature);
   }
 
@@ -135,7 +135,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * @private
    * @param {import("../../geom/CurvePolygon.js").default} curvePolygonGeometry Curve Polygon.
    */
-  appendCurvePolygonInstructions(curvePolygonGeometry) {
+  appendCurvePolygonInstructions_(curvePolygonGeometry) {
     const state = this.state;
     const fill = state.fillStyle !== undefined;
     const stroke = state.strokeStyle !== undefined;
@@ -145,20 +145,20 @@ class CanvasCurveBuilder extends CanvasBuilder {
       // eslint-disable-next-line default-case
       switch (ring.getType()) {
         case 'LineString':
-          this.appendLineStringInstruction(
+          this.appendLineStringInstruction_(
             ring.getFlatCoordinates(),
             ring.getStride(),
           );
           break;
         case 'CircularString':
-          this.appendCircularStringInstruction(
+          this.appendCircularStringInstruction_(
             /** @type {import("../../geom/CircularString.js").default} */ (
               ring
             ).getDrawableFlatCoordinates(),
           );
           break;
         case 'CompoundCurve':
-          this.appendCompoundCurveInstructions(
+          this.appendCompoundCurveInstructions_(
             /** @type {import("../../geom/CompoundCurve.js").default} */ (ring),
           );
           break;
@@ -185,7 +185,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * @param {import("../../geom/CompoundCurve.js").default} compoundCurveGeometry
    * The compound curve geometry for which to append instructions.
    */
-  appendCompoundCurveInstructions(compoundCurveGeometry) {
+  appendCompoundCurveInstructions_(compoundCurveGeometry) {
     let geometryFlatCoords = [];
     const geometries = compoundCurveGeometry.getGeometriesArray();
     for (let i = 0, ii = geometries.length; i < ii; ++i) {
@@ -204,7 +204,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
             i > 0
               ? circularString.getDrawableFlatCoordinates().slice(2)
               : circularString.getDrawableFlatCoordinates();
-          this.appendCircularStringInstruction(
+          this.appendCircularStringInstruction_(
             geometryFlatCoords,
             startIndex,
             moveTo,
@@ -216,7 +216,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
             i > 0
               ? geometry.getFlatCoordinates().slice(geometry.getStride())
               : geometry.getFlatCoordinates();
-          this.appendLineStringInstruction(
+          this.appendLineStringInstruction_(
             geometryFlatCoords,
             geometry.getStride(),
             startIndex,
@@ -238,7 +238,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * MOVE_TO_ARC_TO instruction.
    * @param {boolean} moveTo Whether to emit a MOVE_TO_ARC_TO or ARC_TO.
    */
-  appendCircularStringInstruction(
+  appendCircularStringInstruction_(
     flatCoordinates,
     startIndex = this.coordinates.length,
     moveTo = true,
@@ -263,7 +263,7 @@ class CanvasCurveBuilder extends CanvasBuilder {
    * MOVE_TO_LINE_TO instruction.
    * @param {boolean} moveTo Whether to emit a MOVE_TO_LINE_TO or LINE_TO.
    */
-  appendLineStringInstruction(
+  appendLineStringInstruction_(
     flatCoordinates,
     stride,
     startIndex = this.coordinates.length,

@@ -160,9 +160,9 @@ class CircularString extends SimpleGeometry {
       drawableCoords[dOffset + 2] = flatCoords[offset + stride];
       drawableCoords[dOffset + 3] = flatCoords[offset + stride + 1];
       // center of circle coordinates
-      const centerOfCircle = this.flatCenterOfCircle(i);
-      drawableCoords[dOffset + 4] = centerOfCircle[0];
-      drawableCoords[dOffset + 5] = centerOfCircle[1];
+      const ci = i * 2;
+      drawableCoords[dOffset + 4] = this.flatCenterOfCircleCoordinates_[ci];
+      drawableCoords[dOffset + 5] = this.flatCenterOfCircleCoordinates_[ci + 1];
       dOffset += 6;
     }
     // trailing end coordinates of the last valid arc
@@ -230,9 +230,9 @@ class CircularString extends SimpleGeometry {
       my = this.flatCoordinates[mi + 1];
     const ex = this.flatCoordinates[ei],
       ey = this.flatCoordinates[ei + 1];
-    const center = this.flatCenterOfCircle(arcIndex);
-    const cx = center[0],
-      cy = center[1];
+    const cIdx = arcIndex * 2;
+    const cx = this.flatCenterOfCircleCoordinates_[cIdx],
+      cy = this.flatCenterOfCircleCoordinates_[cIdx + 1];
     const dx = sx - cx,
       dy = sy - cy;
     const r = Math.sqrt(dx * dx + dy * dy);
@@ -299,7 +299,7 @@ class CircularString extends SimpleGeometry {
     }
     const stride = this.stride;
     const coords = this.flatCoordinates;
-    for (let i = 0, n = this.arcCount(); i < n; i++) {
+    for (let i = 0, n = this.arcCount(); i < n; ++i) {
       const offset = i * 2 * stride;
       const bx = coords[offset];
       const by = coords[offset + 1];
@@ -501,7 +501,7 @@ class CircularString extends SimpleGeometry {
     // compute cumulative arc lengths
     const arcLengths = new Array(n);
     let totalLength = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n; ++i) {
       arcLengths[i] = this.arcLength_(i);
       totalLength += arcLengths[i];
     }
@@ -513,7 +513,7 @@ class CircularString extends SimpleGeometry {
     const target = fraction * totalLength;
     // find which arc the target falls in
     let cumulative = 0;
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < n; ++i) {
       if (cumulative + arcLengths[i] >= target || i === n - 1) {
         const localFraction =
           arcLengths[i] > 0 ? (target - cumulative) / arcLengths[i] : 0;
@@ -742,7 +742,7 @@ class CircularString extends SimpleGeometry {
     const flat = this.flatCoordinates;
     const stride = this.stride;
     const count = this.arcCount();
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; ++i) {
       const offset = i * 2 * stride;
       const ret = callback(
         flat[offset],
@@ -813,7 +813,7 @@ class CircularString extends SimpleGeometry {
       [extent[2], extent[3], extent[0], extent[3]], // top
       [extent[0], extent[3], extent[0], extent[1]], // left
     ];
-    for (let i = 0, n = this.arcCount(); i < n; i++) {
+    for (let i = 0, n = this.arcCount(); i < n; ++i) {
       const offset = i * 2 * stride;
       const abx = coords[offset];
       const aby = coords[offset + 1];
@@ -831,7 +831,7 @@ class CircularString extends SimpleGeometry {
       const angles = getArcAngles(cx, cy, abx, aby, amx, amy, aex, aey);
       const cw = isArcClockwise(abx, aby, amx, amy, aex, aey);
       const full = isFullCircle(abx, aby, aex, aey);
-      for (let e = 0; e < 4; e++) {
+      for (let e = 0; e < 4; ++e) {
         if (
           this.arcIntersectsSegment_(
             center,
@@ -972,7 +972,7 @@ class CircularString extends SimpleGeometry {
    */
   getLength() {
     let length = 0;
-    for (let i = 0, n = this.arcCount(); i < n; i++) {
+    for (let i = 0, n = this.arcCount(); i < n; ++i) {
       length += this.arcLength_(i);
     }
     return length;
@@ -1035,7 +1035,7 @@ class CircularString extends SimpleGeometry {
     const flat = this.flatCoordinates;
     const stride = this.stride;
     const coords = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; ++i) {
       const offset = i * 2 * stride;
       const bx = flat[offset];
       const by = flat[offset + 1];
@@ -1089,7 +1089,7 @@ class CircularString extends SimpleGeometry {
         }
       }
       const startJ = i === 0 ? 0 : 1;
-      for (let j = startJ; j <= numSeg; j++) {
+      for (let j = startJ; j <= numSeg; ++j) {
         if (j === 0) {
           coords.push(bx, by);
         } else if (j === numSeg) {
