@@ -429,4 +429,76 @@ describe('ol/interaction/TraceSource.js', function () {
       expect(edge).to.be(edges[1]);
     });
   });
+
+  describe('live updates', function () {
+    it('invalidates the graph cache when a feature is added to the collection', function () {
+      const collection = new Collection();
+      const ts = new TraceSource({features: collection});
+      expect(ts.getEdgeCount()).to.be(0);
+
+      collection.push(
+        new Feature(
+          new LineString([
+            [0, 0],
+            [1, 1],
+          ]),
+        ),
+      );
+      expect(ts.getEdgeCount()).to.be(1);
+    });
+
+    it('invalidates the graph cache when a feature is removed', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+        ]),
+      );
+      const collection = new Collection([f]);
+      const ts = new TraceSource({features: collection});
+      expect(ts.getEdgeCount()).to.be(1);
+
+      collection.remove(f);
+      expect(ts.getEdgeCount()).to.be(0);
+    });
+
+    it('does not invalidate when features is a plain array', function () {
+      const arr = [
+        new Feature(
+          new LineString([
+            [0, 0],
+            [1, 1],
+          ]),
+        ),
+      ];
+      const ts = new TraceSource({features: arr});
+      expect(ts.getEdgeCount()).to.be(1);
+      arr.push(
+        new Feature(
+          new LineString([
+            [2, 2],
+            [3, 3],
+          ]),
+        ),
+      );
+      // Plain arrays are static; cache stays.
+      expect(ts.getEdgeCount()).to.be(1);
+    });
+
+    it('dispose() detaches listeners (no throw on subsequent collection mutation)', function () {
+      const collection = new Collection();
+      const ts = new TraceSource({features: collection});
+      ts.dispose();
+      expect(function () {
+        collection.push(
+          new Feature(
+            new LineString([
+              [0, 0],
+              [1, 1],
+            ]),
+          ),
+        );
+      }).to.not.throwException();
+    });
+  });
 });

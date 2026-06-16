@@ -80,6 +80,25 @@ class TraceSource {
      * @type {Array<TraceEdge>|null}
      */
     this.edges_ = null;
+
+    /**
+     * @private
+     * @type {(function():void)|null}
+     */
+    this.detachCollection_ = null;
+
+    if (this.features_ instanceof Collection) {
+      const invalidate = () => {
+        this.vertices_ = null;
+        this.edges_ = null;
+      };
+      this.features_.on('add', invalidate);
+      this.features_.on('remove', invalidate);
+      this.detachCollection_ = () => {
+        this.features_.un('add', invalidate);
+        this.features_.un('remove', invalidate);
+      };
+    }
   }
 
   /**
@@ -385,6 +404,16 @@ class TraceSource {
       closest,
       Infinity,
     );
+  }
+
+  /**
+   * Detach any internal listeners. The instance must not be used after dispose.
+   */
+  dispose() {
+    if (this.detachCollection_) {
+      this.detachCollection_();
+      this.detachCollection_ = null;
+    }
   }
 }
 
