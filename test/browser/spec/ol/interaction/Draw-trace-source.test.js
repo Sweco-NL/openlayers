@@ -29,7 +29,7 @@ describe('ol/interaction/Draw with TraceSource', function () {
     map = new Map({
       target: target,
       layers: [new VectorLayer({source: source})],
-      view: new View({center: [0, 0], zoom: 0}),
+      view: new View({center: [0, 0], resolution: 1}),
     });
   });
 
@@ -57,6 +57,135 @@ describe('ol/interaction/Draw with TraceSource', function () {
         traceSource: source,
       });
       expect(draw.getTraceSource()).to.be(source);
+    });
+  });
+
+  // Helper: simulate a pointer event sequence at a map pixel position.
+  function simulateEvent(type, x, y) {
+    const evt = document.createEvent('MouseEvents');
+    evt.initMouseEvent(
+      type,
+      true,
+      true,
+      window,
+      0,
+      0,
+      0,
+      x,
+      y,
+      false,
+      false,
+      false,
+      false,
+      0,
+      null,
+    );
+    const viewport = map.getViewport();
+    viewport.dispatchEvent(evt);
+  }
+
+  describe('vertex-snap lifecycle', function () {
+    let draw;
+
+    beforeEach(function () {
+      // Two adjacent line features sharing vertex [1, 1].
+      source.clear();
+      source.addFeatures([
+        new Feature(
+          new LineString([
+            [0, 0],
+            [1, 1],
+          ]),
+        ),
+        new Feature(
+          new LineString([
+            [1, 1],
+            [2, 0],
+          ]),
+        ),
+      ]);
+      traceSource = new TraceSource({
+        features: source.getFeaturesCollection(),
+      });
+      draw = new Draw({
+        source: new VectorSource(),
+        type: 'LineString',
+        trace: true,
+        traceSource: traceSource,
+      });
+      map.addInteraction(draw);
+    });
+
+    it('fires tracestart with no traceSourceSubGeometryKind at a junction', function () {
+      const starts = [];
+      draw.on('tracestart', (e) => starts.push(e));
+      // Click at [0,0] to start drawing.
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+      // Click near [1,1] to enter trace mode.
+      simulateEvent('pointermove', 1, 1);
+      simulateEvent('pointerdown', 1, 1);
+      simulateEvent('pointerup', 1, 1);
+      expect(starts).to.have.length(1);
+      expect(starts[0].traceSourceSubGeometryKind).to.be(undefined);
+    });
+
+    it('fires a trace event with traceSourceSubGeometryKind when an edge becomes active', function () {
+      const events = [];
+      draw.on('trace', (e) => events.push(e));
+
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+      simulateEvent('pointermove', 1, 1);
+      simulateEvent('pointerdown', 1, 1);
+      simulateEvent('pointerup', 1, 1);
+
+      // Cursor moves toward [2,0]; should resolve to the second segment.
+      simulateEvent('pointermove', 1.5, 0.5);
+
+      expect(events.length).to.be.greaterThan(0);
+      expect(events[events.length - 1].traceSourceSubGeometryKind).to.be(
+        'LineString',
+      );
+    });
+
+    it('ignores non-vertex clicks during trace (trace stays active)', function () {
+      const ends = [];
+      draw.on('traceend', (e) => ends.push(e));
+
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+      simulateEvent('pointermove', 1, 1);
+      simulateEvent('pointerdown', 1, 1);
+      simulateEvent('pointerup', 1, 1);
+
+      // Click NOT on a vertex.
+      simulateEvent('pointermove', 1.3, 0.7);
+      simulateEvent('pointerdown', 1.3, 0.7);
+      simulateEvent('pointerup', 1.3, 0.7);
+
+      expect(ends).to.have.length(0);
+    });
+
+    it('ends trace on a click at a snapped vertex', function () {
+      const ends = [];
+      draw.on('traceend', (e) => ends.push(e));
+
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+      simulateEvent('pointermove', 1, 1);
+      simulateEvent('pointerdown', 1, 1);
+      simulateEvent('pointerup', 1, 1);
+
+      simulateEvent('pointermove', 2, 0);
+      simulateEvent('pointerdown', 2, 0);
+      simulateEvent('pointerup', 2, 0);
+
+      expect(ends).to.have.length(1);
     });
   });
 });

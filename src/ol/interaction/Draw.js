@@ -193,6 +193,16 @@ const DrawEventType = {
    * @api
    */
   TRACEEND: 'traceend',
+  /**
+   * Triggered between `tracestart` and `traceend` whenever the active trace edge
+   * changes (cursor crossed onto a different graph edge or off all edges). Only
+   * dispatched when `traceSource` is a `TraceSource` (vertex-only-exit lifecycle).
+   * Payload includes `traceSourceSubGeometryKind` so applications can stamp
+   * segment-type breaks without re-deriving topology.
+   * @event DrawEvent#trace
+   * @api
+   */
+  TRACE: 'trace',
 };
 
 /**
@@ -205,7 +215,7 @@ export class DrawEvent extends Event {
    * @param {DrawEventType} type Type.
    * @param {Feature} feature The feature drawn.
    * @param {import("../coordinate.js").Coordinate} [opt_coordinate] Coordinate associated with the event.
-   * @param {TraceTarget} [opt_traceTarget] Source-side trace target snapshot. When provided
+   * @param {TraceTarget|{feature: Feature, geometry: import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default, ringIndex: (number|undefined), startIndex: (number|undefined), endIndex: (number|undefined), subGeometryKind: ('CircularString'|'LineString')}} [opt_traceTarget] Source-side trace target snapshot. When provided
    * (typically on `traceend`), populates the `traceSource*` and `trace*Index` fields below.
    */
   constructor(type, feature, opt_coordinate, opt_traceTarget) {
@@ -290,6 +300,20 @@ export class DrawEvent extends Event {
      * @api
      */
     this.traceEndIndex = opt_traceTarget ? opt_traceTarget.endIndex : undefined;
+
+    /**
+     * Canonical sub-geometry kind (`'CircularString'` or `'LineString'`) of the
+     * currently active trace edge. Defined on `trace` events and (when known) on
+     * `traceend`; undefined on non-trace events, on `tracestart`, and on `trace`
+     * events fired before the cursor has resolved an edge.
+     * @type {('CircularString'|'LineString')|undefined}
+     * @api
+     */
+    this.traceSourceSubGeometryKind = opt_traceTarget
+      ? /** @type {{subGeometryKind?: ('CircularString'|'LineString')}} */ (
+          opt_traceTarget
+        ).subGeometryKind
+      : undefined;
   }
 }
 
@@ -791,7 +815,7 @@ class Draw extends PointerInteraction {
     this.setTrace(options.trace || false);
 
     /**
-     * @type {TraceState}
+     * @type {TraceState & {mode?: 'traceSource', activeEdge?: import("./TraceSource.js").TraceEdge|null}}
      * @private
      */
     this.traceState_ = {active: false};
@@ -1020,12 +1044,51 @@ class Draw extends PointerInteraction {
   }
 
   /**
+   * Duck-type check: the configured `traceSource` is a `TraceSource` (vertex-only-exit
+   * lifecycle) rather than a `VectorSource` (classic).
+   * @return {boolean} The trace source is the new primitive.
+   * @private
+   */
+  isTraceSourcePrimitive_() {
+    return (
+      this.traceSource_ !== null &&
+      typeof (
+        /** @type {{getActiveEdge?: Function}} */ (this.traceSource_)
+          .getActiveEdge
+      ) === 'function'
+    );
+  }
+
+  /**
+   * Convert the snap tolerance (in pixels) to coordinate-space units at the cursor.
+   * @param {import("../MapBrowserEvent.js").default} event Event.
+   * @return {number} Tolerance in coordinate units.
+   * @private
+   */
+  snapToleranceInCoordinates_(event) {
+    const map = this.getMap();
+    const a = map.getCoordinateFromPixel([event.pixel[0], event.pixel[1]]);
+    const b = map.getCoordinateFromPixel([
+      event.pixel[0] + this.snapTolerance_,
+      event.pixel[1],
+    ]);
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  /**
    * Activate or deactivate trace state based on a browser event.
    * @param {import("../MapBrowserEvent.js").default} event Event.
    * @private
    */
   toggleTraceState_(event) {
     if (!this.traceSource_ || !this.traceCondition_(event)) {
+      return;
+    }
+
+    if (this.isTraceSourcePrimitive_()) {
+      this.toggleTraceStatePrimitive_(event);
       return;
     }
 
@@ -1067,6 +1130,66 @@ class Draw extends PointerInteraction {
         ),
       );
     }
+  }
+
+  /**
+   * Activate or deactivate trace state when `traceSource` is a `TraceSource`.
+   * @param {import("../MapBrowserEvent.js").default} event Event.
+   * @private
+   */
+  toggleTraceStatePrimitive_(event) {
+    if (this.traceState_.active) {
+      this.deactivateTracePrimitive_(event);
+      return;
+    }
+    const tolerance = this.snapToleranceInCoordinates_(event);
+    const traceSource = /** @type {import("./TraceSource.js").default} */ (
+      this.traceSource_
+    );
+    const hit = traceSource.getNearestVertex(event.coordinate, tolerance);
+    if (!hit) {
+      // Click is not on a graph vertex; do not start tracing.
+      return;
+    }
+    this.traceState_ = {
+      active: true,
+      mode: 'traceSource',
+      startCoord: hit.vertex.coordinate.slice(),
+      activeEdge: null,
+    };
+    this.dispatchEvent(
+      new DrawEvent(
+        DrawEventType.TRACESTART,
+        this.sketchFeature_,
+        hit.vertex.coordinate.slice(),
+      ),
+    );
+  }
+
+  /**
+   * @param {import("../MapBrowserEvent.js").default} event Event.
+   * @private
+   */
+  deactivateTracePrimitive_(event) {
+    const activeEdge = this.traceState_.activeEdge;
+    this.traceState_ = {active: false};
+    this.dispatchEvent(
+      new DrawEvent(
+        DrawEventType.TRACEEND,
+        this.sketchFeature_,
+        event.coordinate.slice(),
+        activeEdge
+          ? {
+              feature: activeEdge.feature,
+              geometry: activeEdge.subGeometry,
+              ringIndex: activeEdge.ringIndex,
+              startIndex: undefined,
+              endIndex: undefined,
+              subGeometryKind: activeEdge.kind,
+            }
+          : undefined,
+      ),
+    );
   }
 
   /**
@@ -1233,6 +1356,11 @@ class Draw extends PointerInteraction {
       return;
     }
 
+    if (this.isTraceSourcePrimitive_()) {
+      this.updateTracePrimitive_(event);
+      return;
+    }
+
     this.addTraceTargetsAtCoordinate_(event);
 
     if (traceState.targetIndex === -1) {
@@ -1328,6 +1456,51 @@ class Draw extends PointerInteraction {
   }
 
   /**
+   * Update active edge and fire continuous `trace` events when `traceSource` is a `TraceSource`.
+   * @param {import("../MapBrowserEvent.js").default} event Event.
+   * @private
+   */
+  updateTracePrimitive_(event) {
+    const traceState = this.traceState_;
+    if (!traceState.active) {
+      return;
+    }
+    const tolerance = this.snapToleranceInCoordinates_(event);
+    const traceSource = /** @type {import("./TraceSource.js").default} */ (
+      this.traceSource_
+    );
+    const vertexHit = traceSource.getNearestVertex(event.coordinate, tolerance);
+    const sample = vertexHit
+      ? vertexHit.vertex.coordinate.slice()
+      : event.coordinate;
+    const newEdge = traceSource.getActiveEdge(
+      sample,
+      tolerance,
+      traceState.activeEdge,
+    );
+    if (newEdge !== traceState.activeEdge) {
+      traceState.activeEdge = newEdge;
+      this.dispatchEvent(
+        new DrawEvent(
+          DrawEventType.TRACE,
+          this.sketchFeature_,
+          sample.slice(),
+          newEdge
+            ? {
+                feature: newEdge.feature,
+                geometry: newEdge.subGeometry,
+                ringIndex: newEdge.ringIndex,
+                startIndex: undefined,
+                endIndex: undefined,
+                subGeometryKind: newEdge.kind,
+              }
+            : undefined,
+        ),
+      );
+    }
+  }
+
+  /**
    * Handle drag events.
    * @param {import("../MapBrowserEvent.js").default<PointerEvent>} event Event.
    * @override
@@ -1371,7 +1544,23 @@ class Draw extends PointerInteraction {
         clickEvent.pixel = this.downPx_.slice();
       }
       if (!this.ignoreNextUpEvent_ || !this.traceState_.active) {
-        this.toggleTraceState_(clickEvent);
+        if (this.isTraceSourcePrimitive_() && this.traceState_.active) {
+          // Vertex-only exit: ignore clicks that don't snap to a graph vertex.
+          const exitTolerance = this.snapToleranceInCoordinates_(clickEvent);
+          const exitTraceSource =
+            /** @type {import("./TraceSource.js").default} */ (
+              this.traceSource_
+            );
+          const hit = exitTraceSource.getNearestVertex(
+            clickEvent.coordinate,
+            exitTolerance,
+          );
+          if (hit) {
+            this.toggleTraceState_(clickEvent);
+          }
+        } else {
+          this.toggleTraceState_(clickEvent);
+        }
       }
 
       if (this.shouldHandle_) {
