@@ -5,32 +5,33 @@ import Collection from '../Collection.js';
 
 /**
  * @typedef {Object} Options
- * @property {Array<import("../Feature.js").default> | Collection<import("../Feature.js").default>} features
- * Source features whose outer rings form the trace graph. May be an array (static) or a
- * Collection (the graph cache invalidates on add/remove/change).
+ * @property {Array<import("../Feature.js").default>|Collection<import("../Feature.js").default>} features
+ * Source features whose outer rings will form the trace graph. May be an array
+ * (static) or a Collection (live updates land in a later commit).
  * @property {boolean} [exteriorOnly=true] When true, interior rings (holes) of CurvePolygon
- * and Polygon features are excluded from the graph. When false, interior rings participate
- * as their own connected components.
+ * and Polygon features will be excluded from the graph. When false, interior rings will
+ * participate as their own connected components.
  */
 
 /**
- * Owns the planar graph of shared vertices across a set of source features, used by
- * {@link module:ol/interaction/Draw~Draw} when tracing in vertex-only-exit mode.
- *
- * The graph has one vertex per *exact-coordinate-equal* topology vertex across all eligible
- * rings, and one edge per sub-geometry (each arc of a CircularString, each segment of a
- * LineString, each sub of a CompoundCurve). Features stitch only at shared vertices.
- *
- * @api
+ * @classdesc
+ * Holds the configuration for a multi-feature trace graph: the source features whose
+ * outer rings will be stitched at shared vertices, and whether interior rings (holes)
+ * participate. Subsequent commits build the graph and expose query methods used by
+ * {@link module:ol/interaction/Draw~Draw} for vertex-only-exit tracing.
  */
 class TraceSource {
   /**
    * @param {Options} options Options.
    */
   constructor(options) {
+    if (!options.features) {
+      throw new Error('TraceSource requires options.features');
+    }
+
     /**
      * @private
-     * @type {Array<import("../Feature.js").default> | Collection<import("../Feature.js").default>}
+     * @type {Array<import("../Feature.js").default>|Collection<import("../Feature.js").default>}
      */
     this.features_ = options.features;
 

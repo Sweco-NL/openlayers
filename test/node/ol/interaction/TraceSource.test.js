@@ -38,5 +38,51 @@ describe('ol/interaction/TraceSource.js', function () {
       const ts = new TraceSource({features: [], exteriorOnly: false});
       expect(ts.getExteriorOnly()).to.be(false);
     });
+
+    it('returns a defensive copy from getFeatures()', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const out = ts.getFeatures();
+      out.push(
+        new Feature(
+          new LineString([
+            [2, 2],
+            [3, 3],
+          ]),
+        ),
+      );
+      expect(ts.getFeatures()).to.have.length(1);
+    });
+
+    it('reflects the live Collection at the time getFeatures() is called', function () {
+      const f1 = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+        ]),
+      );
+      const f2 = new Feature(
+        new LineString([
+          [2, 2],
+          [3, 3],
+        ]),
+      );
+      const c = new Collection([f1]);
+      const ts = new TraceSource({features: c});
+      expect(ts.getFeatures()).to.have.length(1);
+      c.push(f2);
+      expect(ts.getFeatures()).to.have.length(2);
+    });
+
+    it('throws when constructed without features', function () {
+      expect(function () {
+        new TraceSource({});
+      }).to.throwException(/TraceSource requires options.features/);
+    });
   });
 });
