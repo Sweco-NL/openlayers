@@ -356,4 +356,77 @@ describe('ol/interaction/TraceSource.js', function () {
       expect(arcEdges).to.have.length(4); // 2 outer + 2 inner
     });
   });
+
+  describe('query API', function () {
+    it('getNearestVertex returns null when no vertex is within tolerance', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const hit = ts.getNearestVertex([5, 5], 1);
+      expect(hit).to.be(null);
+    });
+
+    it('getNearestVertex returns the closest vertex within tolerance', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const hit = ts.getNearestVertex([0.5, 0], 2);
+      expect(hit).to.not.be(null);
+      expect(hit.vertex.coordinate).to.eql([0, 0]);
+      expect(hit.squaredDistance).to.be(0.25);
+    });
+
+    it('getActiveEdge returns the closest edge when no previous edge given', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+          [10, 10],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const edge = ts.getActiveEdge([5, 1], 5, null);
+      expect(edge).to.not.be(null);
+      expect(edge.segmentIndex).to.be(0); // along the horizontal segment
+    });
+
+    it('getActiveEdge sticks to the previous edge when cursor sits on a shared vertex', function () {
+      // Two segments meeting at [10, 0]. Cursor sits exactly on the shared vertex.
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+          [10, 10],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const edges = ts.getEdges();
+      const previous = edges[0]; // we walked in on segment 0
+      const edge = ts.getActiveEdge([10, 0], 1, previous);
+      expect(edge).to.be(previous); // sticky tie-break
+    });
+
+    it('getActiveEdge switches when cursor moves clearly closer to a different edge', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+          [10, 10],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const edges = ts.getEdges();
+      const previous = edges[0];
+      const edge = ts.getActiveEdge([10, 5], 1, previous);
+      expect(edge).to.be(edges[1]);
+    });
+  });
 });

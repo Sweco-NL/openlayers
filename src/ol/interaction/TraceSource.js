@@ -7,7 +7,7 @@ import CompoundCurve from '../geom/CompoundCurve.js';
 import CurvePolygon from '../geom/CurvePolygon.js';
 import LineString from '../geom/LineString.js';
 import Polygon from '../geom/Polygon.js';
-import {coordinatesEqualXY} from './tracing.js';
+import {coordinatesEqualXY, getPointSegmentRelationship} from './tracing.js';
 
 /**
  * @typedef {Object} Options
@@ -305,6 +305,86 @@ class TraceSource {
   getEdges() {
     this.buildIfNeeded_();
     return this.edges_.slice();
+  }
+
+  /**
+   * @param {import("../coordinate.js").Coordinate} coordinate Test coordinate.
+   * @param {number} tolerance Distance tolerance (same units as coordinates).
+   * @return {{vertex: TraceVertex, squaredDistance: number}|null} Nearest vertex within tolerance, or null.
+   */
+  getNearestVertex(coordinate, tolerance) {
+    this.buildIfNeeded_();
+    const tol2 = tolerance * tolerance;
+    let bestVertex = null;
+    let bestDist2 = Infinity;
+    for (const v of this.vertices_) {
+      const dx = v.coordinate[0] - coordinate[0];
+      const dy = v.coordinate[1] - coordinate[1];
+      const d2 = dx * dx + dy * dy;
+      if (d2 <= tol2 && d2 < bestDist2) {
+        bestDist2 = d2;
+        bestVertex = v;
+      }
+    }
+    return bestVertex ? {vertex: bestVertex, squaredDistance: bestDist2} : null;
+  }
+
+  /**
+   * Resolve the active trace edge for a cursor coordinate using sticky-closest-edge
+   * semantics: if `previous` is within `tolerance` of the cursor, `previous` wins (handles
+   * ties at junctions and brief pauses on the current edge); otherwise the geometrically
+   * closest edge wins.
+   *
+   * @param {import("../coordinate.js").Coordinate} coordinate Cursor coordinate.
+   * @param {number} tolerance Distance tolerance for the sticky check.
+   * @param {TraceEdge|null} previous Previously active edge, or null.
+   * @return {TraceEdge|null} The new active edge, or null when the source has no edges.
+   */
+  getActiveEdge(coordinate, tolerance, previous) {
+    this.buildIfNeeded_();
+    const tol2 = tolerance * tolerance;
+    if (previous) {
+      const prevDist2 = this.squaredDistanceToEdge_(coordinate, previous);
+      if (prevDist2 <= tol2) {
+        return previous;
+      }
+    }
+    let bestEdge = null;
+    let bestDist2 = Infinity;
+    for (const edge of this.edges_) {
+      const d2 = this.squaredDistanceToEdge_(coordinate, edge);
+      if (d2 < bestDist2) {
+        bestDist2 = d2;
+        bestEdge = edge;
+      }
+    }
+    return bestEdge;
+  }
+
+  /**
+   * @private
+   * @param {import("../coordinate.js").Coordinate} coordinate The coordinate.
+   * @param {TraceEdge} edge The edge.
+   * @return {number} Squared distance from coordinate to the edge.
+   */
+  squaredDistanceToEdge_(coordinate, edge) {
+    if (edge.kind === 'LineString') {
+      return getPointSegmentRelationship(
+        coordinate[0],
+        coordinate[1],
+        edge.startVertex.coordinate,
+        edge.endVertex.coordinate,
+      ).squaredDistance;
+    }
+    // CircularString edge: delegate to the sub geometry's closestPointXY which
+    // returns the squared distance to the closest point on the curve.
+    const closest = [0, 0];
+    return edge.subGeometry.closestPointXY(
+      coordinate[0],
+      coordinate[1],
+      closest,
+      Infinity,
+    );
   }
 }
 
