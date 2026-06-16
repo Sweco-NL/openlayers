@@ -950,8 +950,18 @@ const modify = new Modify({
   filter: (feature) => !feature.get('_snapPoint'),
 });
 const snap = new Snap({source, vertex: true, edge: true});
+// Dedicated vertex snap on the control-point overlay (exact Point features at
+// every graph vertex). Generous tolerance so the user can reliably grab a
+// vertex to start tracing.
+const controlPointSnap = new Snap({
+  source: controlPointSource,
+  vertex: true,
+  edge: false,
+  pixelTolerance: 20,
+});
 map.addInteraction(modify);
 map.addInteraction(snap);
+map.addInteraction(controlPointSnap);
 
 /** @type {Map<import('../src/ol/Feature.js').default, import('../src/ol/geom/Geometry.js').default>} */
 const modifyStartSnapshots = new window.Map();
@@ -1059,6 +1069,7 @@ function addDrawInteraction() {
     draw = new Draw({
       source,
       type: 'LineString',
+      snapTolerance: 20,
       style: sketchStyle,
       condition: checkCrossingCondition,
       geometryFunction(coordinates, geometry) {
@@ -1095,6 +1106,7 @@ function addDrawInteraction() {
       type: 'LineString',
       trace: true,
       traceSource,
+      snapTolerance: 20,
       style: sketchStyle,
       condition: checkCrossingCondition,
       geometryFunction(coordinates, geometry) {
@@ -1197,10 +1209,13 @@ function addDrawInteraction() {
   });
 
   map.addInteraction(draw);
-  // Re-add snap so it processes before draw (last-added → first-handled).
+  // Re-add snap interactions so they process before draw (last-added → first-handled).
   map.removeInteraction(snap);
+  map.removeInteraction(controlPointSnap);
   snap.setActive(true);
+  controlPointSnap.setActive(true);
   map.addInteraction(snap);
+  map.addInteraction(controlPointSnap);
 }
 
 addDrawInteraction();
