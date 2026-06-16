@@ -7,7 +7,7 @@ import MultiLineString from '../../../../src/ol/geom/MultiLineString.js';
 import MultiPolygon from '../../../../src/ol/geom/MultiPolygon.js';
 import Polygon from '../../../../src/ol/geom/Polygon.js';
 import {
-  coordinatesEqual,
+  coordinatesEqualXY,
   getTraceTargetUpdate,
   getTraceTargets,
   isTraceTargetVertexIndex,
@@ -249,12 +249,15 @@ describe('ol/interaction/tracing.js', function () {
     });
   });
 
-  describe('coordinatesEqual()', function () {
+  describe('coordinatesEqualXY()', function () {
     it('returns true for exact-equal coordinates', function () {
-      expect(coordinatesEqual([1, 2], [1, 2])).to.be(true);
+      expect(coordinatesEqualXY([1, 2], [1, 2])).to.be(true);
     });
     it('returns false for unequal coordinates', function () {
-      expect(coordinatesEqual([1, 2], [1, 2.0000001])).to.be(false);
+      expect(coordinatesEqualXY([1, 2], [1, 2.0000001])).to.be(false);
+    });
+    it('ignores Z/M components', function () {
+      expect(coordinatesEqualXY([1, 2, 3], [1, 2, 99])).to.be(true);
     });
   });
 });

@@ -292,7 +292,7 @@ function isStoredSharedTraceVertex_(oldTarget, newTarget) {
     newTarget.coordinates,
     newTarget.startIndex,
   );
-  return coordinatesEqual(oldEnd, newStart);
+  return coordinatesEqualXY(oldEnd, newStart);
 }
 
 /**
@@ -305,7 +305,7 @@ function getTraceVertexIndexAtCoordinate_(target, coordinate) {
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
     const candidate = coordinates[i];
     if (
-      coordinatesEqual(candidate, coordinate) &&
+      coordinatesEqualXY(candidate, coordinate) &&
       isTraceTargetVertexIndex(target, i)
     ) {
       return i;
@@ -324,7 +324,7 @@ function traceTargetStartsAtCoordinate_(target, coordinate) {
     return false;
   }
   const start = interpolateCoordinate(target.coordinates, target.startIndex);
-  return coordinatesEqual(start, coordinate);
+  return coordinatesEqualXY(start, coordinate);
 }
 
 /**
@@ -569,12 +569,19 @@ function appendTraceTarget(
 }
 
 /**
- * Exact-equality coordinate comparison used by the trace topology.
+ * Exact-equality coordinate comparison restricted to the X and Y components.
+ * Any Z/M components are ignored. This is the dimension contract the trace
+ * topology requires: vertices at the same XY but different Z must still be
+ * treated as the same graph vertex.
+ *
+ * Distinct from the N-D `equals` exported by `coordinate.js` (which several
+ * modules alias as `coordinatesEqual`); the `XY` suffix is intentional.
+ *
  * @param {import("../coordinate.js").Coordinate} a First coordinate.
  * @param {import("../coordinate.js").Coordinate} b Second coordinate.
- * @return {boolean} Coordinates are exactly equal.
+ * @return {boolean} Coordinates have equal X and Y.
  */
-export function coordinatesEqual(a, b) {
+export function coordinatesEqualXY(a, b) {
   return a[0] === b[0] && a[1] === b[1];
 }
 
@@ -628,7 +635,7 @@ function getTraceVertexIndices_(geometry, coordinates) {
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
     if (
       vertexCoordinates.some((vertex) =>
-        coordinatesEqual(vertex, coordinates[i]),
+        coordinatesEqualXY(vertex, coordinates[i]),
       )
     ) {
       vertexIndices.push(i);
