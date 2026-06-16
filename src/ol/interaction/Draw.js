@@ -440,6 +440,22 @@ function isStoredSharedTraceVertex(oldTarget, newTarget) {
   return squaredCoordinateDistance(oldEnd, newStart) === 0;
 }
 
+/**
+ * Find the graph vertex shared by two `TraceSource` edges, if any.
+ * @param {import("./TraceSource.js").TraceEdge} a First edge.
+ * @param {import("./TraceSource.js").TraceEdge} b Second edge.
+ * @return {?import("./TraceSource.js").TraceVertex} Shared vertex or null.
+ */
+function findSharedTraceVertex(a, b) {
+  if (a.startVertex === b.startVertex || a.startVertex === b.endVertex) {
+    return a.startVertex;
+  }
+  if (a.endVertex === b.startVertex || a.endVertex === b.endVertex) {
+    return a.endVertex;
+  }
+  return null;
+}
+
 /***
  * @template Return
  * @typedef {import("../Observable.js").OnSignature<import("../Observable.js").EventTypes, import("../events/Event.js").default, Return> &
@@ -1156,6 +1172,9 @@ class Draw extends PointerInteraction {
       mode: 'traceSource',
       startCoord: hit.vertex.coordinate.slice(),
       activeEdge: null,
+      entryVertex: hit.vertex,
+      lastCommittedVertex: null,
+      previousCommittedVertex: null,
     };
     this.dispatchEvent(
       new DrawEvent(
@@ -1457,6 +1476,8 @@ class Draw extends PointerInteraction {
 
   /**
    * Update active edge and fire continuous `trace` events when `traceSource` is a `TraceSource`.
+   * Also handles vertex-snap, cursor-hugging onto the active edge, and committing
+   * traversed vertices into the sketch so the user sees the boundary being followed.
    * @param {import("../MapBrowserEvent.js").default} event Event.
    * @private
    */
@@ -1469,22 +1490,67 @@ class Draw extends PointerInteraction {
     const traceSource = /** @type {import("./TraceSource.js").default} */ (
       this.traceSource_
     );
+
+    // 1. Vertex snap: if cursor is within tolerance of a graph vertex, use that
+    //    vertex's coordinate when resolving the active edge.
     const vertexHit = traceSource.getNearestVertex(event.coordinate, tolerance);
     const sample = vertexHit
       ? vertexHit.vertex.coordinate.slice()
       : event.coordinate;
+
+    // 2. Resolve active edge (sticky-closest semantics live in TraceSource).
     const newEdge = traceSource.getActiveEdge(
       sample,
       tolerance,
       traceState.activeEdge,
     );
+
+    // 3. Cursor hugging: project the raw cursor onto the active edge so the
+    //    in-flight sketch segment follows the boundary instead of drifting
+    //    away with the mouse. Vertex hits take precedence so we land exactly
+    //    on the vertex coordinate.
+    let snappedCoord;
+    if (vertexHit) {
+      snappedCoord = vertexHit.vertex.coordinate.slice();
+    } else if (newEdge) {
+      const cp = [0, 0];
+      newEdge.subGeometry.closestPointXY(
+        event.coordinate[0],
+        event.coordinate[1],
+        cp,
+        Infinity,
+      );
+      snappedCoord = cp;
+    } else {
+      snappedCoord = event.coordinate.slice();
+    }
+
+    // 4. Edge transition: commit (or uncommit on backtrack) the shared vertex
+    //    between the previous active edge and the new one.
     if (newEdge !== traceState.activeEdge) {
+      const oldEdge = traceState.activeEdge;
       traceState.activeEdge = newEdge;
+      if (oldEdge && newEdge) {
+        const shared = findSharedTraceVertex(oldEdge, newEdge);
+        if (shared) {
+          if (shared === traceState.previousCommittedVertex) {
+            // Cursor swept back across the previous junction: undo the last
+            // commit so the path retracts.
+            this.removeLastPoints_(1);
+            traceState.lastCommittedVertex = traceState.previousCommittedVertex;
+            traceState.previousCommittedVertex = null;
+          } else if (shared !== traceState.lastCommittedVertex) {
+            this.appendCoordinates([shared.coordinate.slice()]);
+            traceState.previousCommittedVertex = traceState.lastCommittedVertex;
+            traceState.lastCommittedVertex = shared;
+          }
+        }
+      }
       this.dispatchEvent(
         new DrawEvent(
           DrawEventType.TRACE,
           this.sketchFeature_,
-          sample.slice(),
+          snappedCoord.slice(),
           newEdge
             ? {
                 feature: newEdge.feature,
@@ -1497,6 +1563,17 @@ class Draw extends PointerInteraction {
             : undefined,
         ),
       );
+    }
+
+    // 5. Update the event so subsequent modifyDrawing_ / sketch-point logic
+    //    sees the snapped coordinate.
+    event.coordinate = snappedCoord;
+    const map = this.getMap();
+    if (map) {
+      const pixel = map.getPixelFromCoordinate(snappedCoord);
+      if (pixel) {
+        event.pixel = [Math.round(pixel[0]), Math.round(pixel[1])];
+      }
     }
   }
 
