@@ -177,5 +177,11 @@ describe('ol/interaction/TraceSource.js', function () {
       const ts = new TraceSource({features: [f], exteriorOnly: false});
       expect(ts.getVertexCount()).to.be(8);
     });
+
+    it('handles a Polygon with no rings without throwing', function () {
+      const f = new Feature(new Polygon([]));
+      const ts = new TraceSource({features: [f]});
+      expect(ts.getVertexCount()).to.be(0);
+    });
   });
 });

@@ -107,7 +107,7 @@ class TraceSource {
     }
     if (geometry instanceof Polygon) {
       const rings = geometry.getCoordinates();
-      const max = this.exteriorOnly_ ? 1 : rings.length;
+      const max = Math.min(this.exteriorOnly_ ? 1 : rings.length, rings.length);
       for (let i = 0; i < max; ++i) {
         this.addRing_(rings[i], true);
       }
