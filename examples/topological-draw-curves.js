@@ -117,6 +117,9 @@ function resetSketchState() {
 const featuresCollection = new Collection();
 const source = new VectorSource({features: featuresCollection});
 
+/** Visual-only overlay of vertex dots ("control points"). */
+const controlPointSource = new VectorSource();
+
 // ── Topology helpers ─────────────────────────────────────────
 
 /**
@@ -796,11 +799,82 @@ function sketchStyle(feature) {
   return styles;
 }
 
+// ── Control-point overlay (visual only) ──────────────────────
+
+/**
+ * Extract vertex coordinates from a feature's geometry. For `CircularString`
+ * subs we mark midpoints separately so the style can render them smaller.
+ * @param {import('../src/ol/geom/Geometry.js').default} geom Geometry.
+ * @return {Array<{coord: Array<number>, isMid: boolean}>} Control points.
+ */
+function getControlPoints(geom) {
+  const out = [];
+  function fromSimple(g) {
+    const coords = g.getCoordinates();
+    const isCirc = g.getType() === 'CircularString';
+    for (let i = 0; i < coords.length; i++) {
+      out.push({coord: coords[i], isMid: isCirc && i % 2 === 1});
+    }
+  }
+  function fromRing(ring) {
+    if (ring.getType() === 'CompoundCurve') {
+      for (const sub of ring.getGeometriesArray()) {
+        fromSimple(sub);
+      }
+    } else {
+      fromSimple(ring);
+    }
+  }
+  const type = geom.getType();
+  if (type === 'CurvePolygon') {
+    for (const ring of geom.getRingsArray()) {
+      fromRing(ring);
+    }
+  } else if (type === 'CompoundCurve') {
+    fromRing(geom);
+  } else if (type === 'CircularString' || type === 'LineString') {
+    fromSimple(geom);
+  }
+  return out;
+}
+
+function rebuildControlPointSource() {
+  controlPointSource.clear();
+  for (const feat of source.getFeatures()) {
+    const geom = feat.getGeometry();
+    if (!geom) {
+      continue;
+    }
+    for (const pt of getControlPoints(geom)) {
+      controlPointSource.addFeature(
+        new Feature({
+          geometry: new Point(pt.coord),
+          _controlPoint: true,
+          _isMid: pt.isMid,
+        }),
+      );
+    }
+  }
+}
+
+function controlPointStyle(feature) {
+  const isMid = !!feature.get('_isMid');
+  return new Style({
+    image: new CircleStyle({
+      radius: isMid ? 3 : 5,
+      fill: new Fill({color: isMid ? '#ffffff' : '#0064c8'}),
+      stroke: new Stroke({color: '#003a73', width: 1.5}),
+    }),
+  });
+}
+
+source.on(['addfeature', 'removefeature', 'changefeature'], () => {
+  rebuildControlPointSource();
+});
+
 // ── Map setup ────────────────────────────────────────────────
 
 // Demo features pre-seeded so trace can be exercised immediately.
-// A square with one bumpy (arc) side, plus a LineString that shares one
-// vertex with the polygon's outer ring at [0, 0].
 const demoPoly = new Feature(
   new CurvePolygon([
     new CompoundCurve([
@@ -844,6 +918,7 @@ const map = new Map({
   layers: [
     new TileLayer({source: new OSM()}),
     new VectorLayer({source, style: featureStyle}),
+    new VectorLayer({source: controlPointSource, style: controlPointStyle}),
   ],
   target: 'map',
   view: new View({center: [0, 0], zoom: 4}),
