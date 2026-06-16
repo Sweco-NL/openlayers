@@ -292,7 +292,7 @@ function isStoredSharedTraceVertex_(oldTarget, newTarget) {
     newTarget.coordinates,
     newTarget.startIndex,
   );
-  return coordinatesEqual_(oldEnd, newStart);
+  return coordinatesEqual(oldEnd, newStart);
 }
 
 /**
@@ -305,7 +305,7 @@ function getTraceVertexIndexAtCoordinate_(target, coordinate) {
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
     const candidate = coordinates[i];
     if (
-      coordinatesEqual_(candidate, coordinate) &&
+      coordinatesEqual(candidate, coordinate) &&
       isTraceTargetVertexIndex(target, i)
     ) {
       return i;
@@ -324,7 +324,7 @@ function traceTargetStartsAtCoordinate_(target, coordinate) {
     return false;
   }
   const start = interpolateCoordinate(target.coordinates, target.startIndex);
-  return coordinatesEqual_(start, coordinate);
+  return coordinatesEqual(start, coordinate);
 }
 
 /**
@@ -569,11 +569,12 @@ function appendTraceTarget(
 }
 
 /**
+ * Exact-equality coordinate comparison used by the trace topology.
  * @param {import("../coordinate.js").Coordinate} a First coordinate.
  * @param {import("../coordinate.js").Coordinate} b Second coordinate.
  * @return {boolean} Coordinates are exactly equal.
  */
-function coordinatesEqual_(a, b) {
+export function coordinatesEqual(a, b) {
   return a[0] === b[0] && a[1] === b[1];
 }
 
@@ -627,7 +628,7 @@ function getTraceVertexIndices_(geometry, coordinates) {
   for (let i = 0, ii = coordinates.length; i < ii; ++i) {
     if (
       vertexCoordinates.some((vertex) =>
-        coordinatesEqual_(vertex, coordinates[i]),
+        coordinatesEqual(vertex, coordinates[i]),
       )
     ) {
       vertexIndices.push(i);

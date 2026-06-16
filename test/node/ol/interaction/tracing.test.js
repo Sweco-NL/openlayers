@@ -7,6 +7,7 @@ import MultiLineString from '../../../../src/ol/geom/MultiLineString.js';
 import MultiPolygon from '../../../../src/ol/geom/MultiPolygon.js';
 import Polygon from '../../../../src/ol/geom/Polygon.js';
 import {
+  coordinatesEqual,
   getTraceTargetUpdate,
   getTraceTargets,
   isTraceTargetVertexIndex,
@@ -245,6 +246,15 @@ describe('ol/interaction/tracing.js', function () {
       expect(targets.length).to.be(1);
       expect(targets[0].geometry).to.be(curve);
       expect(targets[0].ringIndex).to.be(undefined);
+    });
+  });
+
+  describe('coordinatesEqual()', function () {
+    it('returns true for exact-equal coordinates', function () {
+      expect(coordinatesEqual([1, 2], [1, 2])).to.be(true);
+    });
+    it('returns false for unequal coordinates', function () {
+      expect(coordinatesEqual([1, 2], [1, 2.0000001])).to.be(false);
     });
   });
 });
