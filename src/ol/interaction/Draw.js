@@ -108,9 +108,12 @@ import {
  * @property {boolean} [traceBacktracking=true] Allow tracing to remove
  * previously traced coordinates when the pointer moves backward along the
  * current trace target or switches to another target.
- * @property {VectorSource} [traceSource] Source for features to trace.  If tracing is active and a `traceSource` is
- * not provided, the interaction's `source` will be used.  Tracing requires that the interaction is configured with
- * either a `traceSource` or a `source`.
+ * @property {VectorSource | import("./TraceSource.js").default} [traceSource] Source for
+ * features to trace. Pass a `VectorSource` for OL's classic trace behavior (one ring picked
+ * at click time, limited shared-vertex pivots). Pass a `TraceSource` for the vertex-only-exit
+ * trace lifecycle with seamless multi-feature hopping along shared vertices and a continuous
+ * `trace` event reporting active sub-geometry changes. Defaults to the interaction's
+ * `source` when tracing is active and `traceSource` is omitted.
  * @property {boolean} [wrapX=false] Wrap the world horizontally on the sketch
  * overlay.
  * @property {import("../geom/Geometry.js").GeometryLayout} [geometryLayout='XY'] Layout of the
@@ -863,6 +866,15 @@ class Draw extends PointerInteraction {
    */
   getOverlay() {
     return this.overlay_;
+  }
+
+  /**
+   * Get the source used to look up features for tracing.
+   * @return {VectorSource | import("./TraceSource.js").default | null} The active trace source, or null when no source is configured.
+   * @api
+   */
+  getTraceSource() {
+    return this.traceSource_;
   }
 
   /**
