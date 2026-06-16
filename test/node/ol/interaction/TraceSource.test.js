@@ -184,4 +184,74 @@ describe('ol/interaction/TraceSource.js', function () {
       expect(ts.getVertexCount()).to.be(0);
     });
   });
+
+  describe('graph building (edges)', function () {
+    it('creates one edge per LineString segment', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+          [2, 2],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      expect(ts.getEdgeCount()).to.be(2);
+    });
+
+    it('creates one edge per Polygon ring segment', function () {
+      const f = new Feature(
+        new Polygon([
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+            [0, 0],
+          ],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      // 4 sides of the square.
+      expect(ts.getEdgeCount()).to.be(4);
+    });
+
+    it('LineString edges carry kind="LineString" and a segmentIndex', function () {
+      const f = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+          [2, 2],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const edges = ts.getEdges();
+      expect(edges).to.have.length(2);
+      expect(edges[0].kind).to.be('LineString');
+      expect(edges[0].subGeometry).to.be(f.getGeometry());
+      expect(edges[0].segmentIndex).to.be(0);
+      expect(edges[1].segmentIndex).to.be(1);
+    });
+
+    it('edges reference the shared vertex when two LineStrings meet', function () {
+      const a = new Feature(
+        new LineString([
+          [0, 0],
+          [1, 1],
+        ]),
+      );
+      const b = new Feature(
+        new LineString([
+          [1, 1],
+          [2, 2],
+        ]),
+      );
+      const ts = new TraceSource({features: [a, b]});
+      const edges = ts.getEdges();
+      expect(edges).to.have.length(2);
+      // Vertex with coord [1,1] should appear as endVertex of edge 0 and startVertex of edge 1.
+      expect(edges[0].endVertex.coordinate).to.eql([1, 1]);
+      expect(edges[1].startVertex.coordinate).to.eql([1, 1]);
+      expect(edges[0].endVertex).to.be(edges[1].startVertex);
+    });
+  });
 });

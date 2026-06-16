@@ -23,6 +23,22 @@ import {coordinatesEqualXY} from './tracing.js';
  */
 
 /**
+ * @typedef {Object} TraceEdge
+ * @property {'CircularString'|'LineString'} kind Canonical sub-geometry kind. Applications
+ * read this to stamp segment-type breaks.
+ * @property {import("../geom/SimpleGeometry.js").default|import("../geom/CompoundCurve.js").default|import("../geom/CircularString.js").default} subGeometry
+ * The owning sub-geometry instance. For `LineString` and `Polygon` ring edges this is the
+ * parent geometry; consumers combine with `segmentIndex` to identify the segment. For arc
+ * edges this is the `CircularString` sub itself.
+ * @property {number} [segmentIndex] Segment index within `subGeometry` for `LineString`-segment
+ * edges. Undefined for whole-sub edges (arcs).
+ * @property {TraceVertex} startVertex Start vertex.
+ * @property {TraceVertex} endVertex End vertex.
+ * @property {import("../Feature.js").default} feature The owning feature.
+ * @property {number} [ringIndex] Ring index within a polygon parent (0 = exterior).
+ */
+
+/**
  * @classdesc
  * Holds the configuration for a multi-feature trace graph: the source features whose
  * outer rings will be stitched at shared vertices, and whether interior rings (holes)
@@ -55,6 +71,12 @@ class TraceSource {
      * @type {Array<TraceVertex>|null}
      */
     this.vertices_ = null;
+
+    /**
+     * @private
+     * @type {Array<TraceEdge>|null}
+     */
+    this.edges_ = null;
   }
 
   /**
@@ -89,27 +111,35 @@ class TraceSource {
       return;
     }
     this.vertices_ = [];
+    this.edges_ = [];
     const features = this.getFeatures();
     for (const feature of features) {
       const geometry = feature.getGeometry();
-      this.collectVerticesFromGeometry_(geometry);
+      this.collectFromGeometry_(geometry, feature);
     }
   }
 
   /**
    * @private
    * @param {import("../geom/Geometry.js").default} geometry The geometry.
+   * @param {import("../Feature.js").default} feature The owning feature.
    */
-  collectVerticesFromGeometry_(geometry) {
+  collectFromGeometry_(geometry, feature) {
     if (geometry instanceof LineString) {
-      this.addRing_(geometry.getCoordinates(), false);
+      this.addLinearRingOrLine_(
+        geometry.getCoordinates(),
+        false,
+        geometry,
+        feature,
+        undefined,
+      );
       return;
     }
     if (geometry instanceof Polygon) {
       const rings = geometry.getCoordinates();
       const max = Math.min(this.exteriorOnly_ ? 1 : rings.length, rings.length);
       for (let i = 0; i < max; ++i) {
-        this.addRing_(rings[i], true);
+        this.addLinearRingOrLine_(rings[i], true, geometry, feature, i);
       }
       return;
     }
@@ -118,13 +148,29 @@ class TraceSource {
 
   /**
    * @private
-   * @param {Array<import("../coordinate.js").Coordinate>} coordinates Ring coordinates.
-   * @param {boolean} ring True for closed rings (skip the duplicated closing coordinate).
+   * @param {Array<import("../coordinate.js").Coordinate>} coordinates Ring or line coordinates.
+   * @param {boolean} closed True for closed rings (the closing coordinate is wired back to the first vertex without creating a duplicate).
+   * @param {import("../geom/SimpleGeometry.js").default} subGeometry Owning sub-geometry.
+   * @param {import("../Feature.js").default} feature Owning feature.
+   * @param {number|undefined} ringIndex Ring index within a polygon parent.
    */
-  addRing_(coordinates, ring) {
-    const last = ring ? coordinates.length - 1 : coordinates.length;
-    for (let i = 0; i < last; ++i) {
-      this.findOrAddVertex_(coordinates[i]);
+  addLinearRingOrLine_(coordinates, closed, subGeometry, feature, ringIndex) {
+    const segmentEnd = coordinates.length - 1;
+    for (let i = 0; i < segmentEnd; ++i) {
+      const start = this.findOrAddVertex_(coordinates[i]);
+      const end =
+        closed && i === segmentEnd - 1
+          ? this.findOrAddVertex_(coordinates[0])
+          : this.findOrAddVertex_(coordinates[i + 1]);
+      this.edges_.push({
+        kind: 'LineString',
+        subGeometry: subGeometry,
+        segmentIndex: i,
+        startVertex: start,
+        endVertex: end,
+        feature: feature,
+        ringIndex: ringIndex,
+      });
     }
   }
 
@@ -145,6 +191,22 @@ class TraceSource {
     };
     this.vertices_.push(vertex);
     return vertex;
+  }
+
+  /**
+   * @return {number} Number of graph edges.
+   */
+  getEdgeCount() {
+    this.buildIfNeeded_();
+    return this.edges_.length;
+  }
+
+  /**
+   * @return {Array<TraceEdge>} Snapshot of graph edges.
+   */
+  getEdges() {
+    this.buildIfNeeded_();
+    return this.edges_.slice();
   }
 }
 
