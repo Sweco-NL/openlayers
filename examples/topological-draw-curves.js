@@ -461,20 +461,36 @@ function buildSubsFromBreaks(coords, breaks) {
 }
 
 /**
- * Build the sketch geometry for the active draw mode.
+ * Build the sketch geometry's subs for the active draw mode. The sketch is
+ * always rendered as a `CompoundCurve` (mutated in place via
+ * `setGeometriesArray`) regardless of the user's target geometry type. The
+ * proper final geometry is constructed in `finalizeGeometry` at `drawend`.
+ * @param {Array<Array<number>>} coords Coordinates.
+ * @param {Array<{index: number, type: string}>} breaks Segment breaks.
+ * @return {Array<import('../src/ol/geom/SimpleGeometry.js').default>} Subs.
+ */
+function buildSketchSubs(coords, breaks) {
+  const subs = buildSubsFromBreaks(coords, breaks);
+  if (subs.length === 0) {
+    return [
+      new LineString(coords.length >= 2 ? coords : [coords[0], coords[0]]),
+    ];
+  }
+  return subs;
+}
+
+/**
+ * Build the final feature geometry from the sketch's coords/breaks.
  * @param {Array<Array<number>>} coords Coordinates.
  * @param {Array<{index: number, type: string}>} breaks Segment breaks.
  * @param {string} mode Draw mode.
- * @return {import('../src/ol/geom/Geometry.js').default} Sketch geometry.
+ * @return {import('../src/ol/geom/Geometry.js').default} Final geometry.
  */
-function buildSketchGeometry(coords, breaks, mode) {
+function buildFinalGeometry(coords, breaks, mode) {
   if (mode === 'CircularString') {
     return new CircularString(coords);
   }
-  const subs = buildSubsFromBreaks(coords, breaks);
-  if (subs.length === 0) {
-    return new LineString(coords.length >= 2 ? coords : [coords[0], coords[0]]);
-  }
+  const subs = buildSketchSubs(coords, breaks);
   if (mode === 'CompoundCurve') {
     return subs.length === 1 ? subs[0] : new CompoundCurve(subs);
   }
@@ -1083,21 +1099,12 @@ function addDrawInteraction() {
       condition: checkCrossingCondition,
       geometryFunction(coordinates, geometry) {
         lastSketchCoordinates = coordinates.map((c) => c.slice());
-        const built = buildSketchGeometry(coordinates, segmentBreaks, mode);
+        const subs = buildSketchSubs(coordinates, segmentBreaks);
 
         if (!geometry) {
-          geometry = built;
-        } else if (
-          geometry.getType() === built.getType() &&
-          geometry.getType() === 'CompoundCurve'
-        ) {
-          /** @type {CompoundCurve} */ (geometry).setGeometriesArray(
-            /** @type {CompoundCurve} */ (built).getGeometriesArray(),
-          );
+          geometry = new CompoundCurve(subs);
         } else {
-          // Type changed (e.g. switched between LineString → CompoundCurve).
-          // Replace via a new geometry so OL refreshes the overlay.
-          geometry = built;
+          /** @type {CompoundCurve} */ (geometry).setGeometriesArray(subs);
         }
 
         // Auto-close: when the cursor near-snaps back to the start vertex.
@@ -1163,6 +1170,22 @@ function addDrawInteraction() {
   draw.on('drawend', (e) => {
     drawing = false;
     e.feature.set('_drawn', true);
+    // Replace the sketch's CompoundCurve with the proper final type.
+    const mode = typeSelect.value;
+    if (mode === 'CompoundCurve' || mode === 'CurvePolygon') {
+      const coords = lastSketchCoordinates.length
+        ? lastSketchCoordinates.map((c) => c.slice())
+        : e.feature.getGeometry().getCoordinates();
+      // Close-by-duplicating-first for CurvePolygon if the user didn't.
+      if (mode === 'CurvePolygon' && coords.length >= 3) {
+        const first = coords[0];
+        const last = coords[coords.length - 1];
+        if (first[0] !== last[0] || first[1] !== last[1]) {
+          coords.push(first.slice());
+        }
+      }
+      e.feature.setGeometry(buildFinalGeometry(coords, segmentBreaks, mode));
+    }
     resetSketchState();
     status('Feature added. Draw another or switch to edit mode.');
     map.render();
