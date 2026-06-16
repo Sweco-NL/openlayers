@@ -43,31 +43,32 @@
 - Modify: `src/ol/interaction/tracing.js`
 - Test: `test/node/ol/interaction/tracing.test.js`
 
-The `TraceSource` graph builder needs the same exact-coordinate-equality check as the existing trace logic. Export it under a public-ish name (drop the trailing underscore) without changing existing call sites.
+The `TraceSource` graph builder needs the same exact-coordinate-equality check as the existing trace logic. Export it under a public-ish name. Use `coordinatesEqualXY` rather than `coordinatesEqual` because three other modules in the codebase (`View.js`, `Modify.js`, `coordinate.test.js`) already alias `equals as coordinatesEqual` from `coordinate.js` — and that N-D `equals` would *change behavior* for 3D features versus the XY-only semantic the trace topology requires (a vertex at the same XY but different Z must still stitch). The explicit `XY` suffix prevents the collision and signals the dimension contract.
 
 - [ ] **Step 1: Add a failing import test**
 
-Add to `test/node/ol/interaction/tracing.test.js` (top-level `describe` block):
+Add to `test/node/ol/interaction/tracing.test.js`. The file already imports from `tracing.js` — extend the existing named-import list with `coordinatesEqualXY`. Add a new top-level `describe` block alongside the existing `describe('getTraceTargetUpdate()', ...)`:
 
 ```js
-import {coordinatesEqual} from '../../../../src/ol/interaction/tracing.js';
-
-describe('coordinatesEqual()', function () {
+describe('coordinatesEqualXY()', function () {
   it('returns true for exact-equal coordinates', function () {
-    expect(coordinatesEqual([1, 2], [1, 2])).to.be(true);
+    expect(coordinatesEqualXY([1, 2], [1, 2])).to.be(true);
   });
-  it('returns false for unequal coordinates', function () {
-    expect(coordinatesEqual([1, 2], [1, 2.0000001])).to.be(false);
+  it('returns false for unequal X or Y', function () {
+    expect(coordinatesEqualXY([1, 2], [1, 2.0000001])).to.be(false);
+  });
+  it('ignores Z/M components', function () {
+    expect(coordinatesEqualXY([1, 2, 3], [1, 2, 99])).to.be(true);
   });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm run test-node -- --grep "coordinatesEqual"`
-Expected: FAIL — `coordinatesEqual is not a function` (import resolves to `undefined`).
+Run: `npm run test-node -- --grep "coordinatesEqualXY"`
+Expected: FAIL — `coordinatesEqualXY is not a function`.
 
-- [ ] **Step 3: Export `coordinatesEqual` from `tracing.js`**
+- [ ] **Step 3: Export `coordinatesEqualXY` from `tracing.js`**
 
 In `src/ol/interaction/tracing.js`, find:
 
@@ -81,25 +82,29 @@ Replace with:
 
 ```js
 /**
- * Exact-equality coordinate comparison used by the trace topology.
+ * Exact-equality coordinate comparison restricted to the X and Y components.
+ * Any Z/M components are ignored. This is the dimension contract the trace
+ * topology requires: vertices at the same XY but different Z must still be
+ * treated as the same graph vertex.
+ *
+ * Distinct from the N-D `equals` exported by `coordinate.js` (which several
+ * modules alias as `coordinatesEqual`); the `XY` suffix is intentional.
+ *
  * @param {import("../coordinate.js").Coordinate} a First coordinate.
  * @param {import("../coordinate.js").Coordinate} b Second coordinate.
- * @return {boolean} Coordinates are exactly equal.
+ * @return {boolean} Coordinates have equal X and Y.
  */
-export function coordinatesEqual(a, b) {
+export function coordinatesEqualXY(a, b) {
   return a[0] === b[0] && a[1] === b[1];
 }
-
-// Backwards-compatible internal alias kept for in-file call sites.
-const coordinatesEqual_ = coordinatesEqual;
 ```
 
-(The alias keeps the existing in-file references at lines ~295, ~308, ~327, ~630 working without churn. They can be cleaned up in a follow-up if desired.)
+Update every existing call site of `coordinatesEqual_` in `tracing.js` (approximately lines 295, 308, 327, 630) to call `coordinatesEqualXY` directly.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm run test-node -- --grep "coordinatesEqual"`
-Expected: PASS, 2 tests.
+Run: `npm run test-node -- --grep "coordinatesEqualXY"`
+Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Run full node tests to verify nothing regressed**
 
@@ -111,7 +116,7 @@ Expected: all existing tests pass.
 ```bash
 npm run lint -- --no-cache
 git add src/ol/interaction/tracing.js test/node/ol/interaction/tracing.test.js
-git commit -m "refactor(interaction): export coordinatesEqual from tracing"
+git commit -m "refactor(interaction): export coordinatesEqualXY from tracing"
 ```
 
 ---
@@ -325,7 +330,7 @@ In `src/ol/interaction/TraceSource.js`, add imports and the graph logic. Replace
 import Collection from '../Collection.js';
 import LineString from '../geom/LineString.js';
 import Polygon from '../geom/Polygon.js';
-import {coordinatesEqual} from './tracing.js';
+import {coordinatesEqualXY} from './tracing.js';
 
 /**
  * @typedef {Object} Options
@@ -454,7 +459,7 @@ class TraceSource {
    */
   findOrAddVertex_(coordinate) {
     for (const v of this.vertices_) {
-      if (coordinatesEqual(v.coordinate, coordinate)) {
+      if (coordinatesEqualXY(v.coordinate, coordinate)) {
         return v;
       }
     }
