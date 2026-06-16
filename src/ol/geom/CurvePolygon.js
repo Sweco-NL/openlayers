@@ -294,15 +294,15 @@ class CurvePolygon extends Geometry {
    * CompoundCurves recurse into sub-geometries. Other geometries
    * return their raw flat coordinates (projected to stride 2).
    * @param {CurveRing} ring Ring geometry (CircularString, CompoundCurve, or LineString).
-   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units.
    * @return {Array<number>} Tessellated flat coordinates with stride 2.
    * @private
    */
-  getTessellatedRingCoords_(ring, pointsPerArc) {
+  getTessellatedRingCoords_(ring, tolerance) {
     if (ring.getType() === 'CircularString') {
       return /** @type {import("./CircularString.js").default} */ (
         ring
-      ).tessellate(pointsPerArc);
+      ).tessellate(tolerance);
     }
     if (ring.getType() === 'CompoundCurve') {
       const compoundCurve =
@@ -310,10 +310,7 @@ class CurvePolygon extends Geometry {
       const coords = [];
       const geoms = compoundCurve.getGeometriesArray();
       for (let i = 0, ii = geoms.length; i < ii; ++i) {
-        const subCoords = this.getTessellatedRingCoords_(
-          geoms[i],
-          pointsPerArc,
-        );
+        const subCoords = this.getTessellatedRingCoords_(geoms[i], tolerance);
         // skip the first point of subsequent sub-geometries (junction dedup)
         const start = i > 0 ? 2 : 0;
         for (let j = start, jj = subCoords.length; j < jj; ++j) {
@@ -411,14 +408,18 @@ class CurvePolygon extends Geometry {
    * This provides the bridge between curve geometry and flat-coordinate
    * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).
    *
+   * The returned arrays are owned by the caller and may be retained safely;
+   * internal cached buffers are cloned before being returned so subsequent
+   * mutations to this geometry do not affect previously returned data.
+   *
    * @return {{flatCoordinates: Array<number>, ends: Array<number>, stride: number}}
    *   Tessellated flat coordinates with ring end indices and stride.
    * @api
    */
   getTessellatedFlatData() {
     return {
-      flatCoordinates: this.getOrientedFlatCoordinates(),
-      ends: this.getTessellatedEnds(),
+      flatCoordinates: this.getOrientedFlatCoordinates().slice(),
+      ends: this.getTessellatedEnds().slice(),
       stride: 2,
     };
   }
@@ -778,15 +779,15 @@ class CurvePolygon extends Geometry {
   /**
    * Returns tessellated (densified) flat coordinates approximating all rings
    * as polyline segments. The output uses stride 2 (X, Y only).
-   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units.
    * @return {Array<number>} Flat coordinates with stride 2.
    * @api
    */
-  tessellate(pointsPerArc) {
+  tessellate(tolerance) {
     const coords = [];
     for (let i = 0, ii = this.rings_.length; i < ii; ++i) {
       const ring = this.rings_[i];
-      const ringCoords = this.getTessellatedRingCoords_(ring, pointsPerArc);
+      const ringCoords = this.getTessellatedRingCoords_(ring, tolerance);
       for (let j = 0, jj = ringCoords.length; j < jj; ++j) {
         coords.push(ringCoords[j]);
       }
@@ -841,12 +842,16 @@ class CurvePolygon extends Geometry {
       sameArcToleranceSq = 1e-4;
     }
     const arcs = [];
-    this.forEachArc(function (bx, by, mx, my, ex, ey) {
+    this.forEachCurveSegment(function (bx, by, mx, my, ex, ey) {
       arcs.push([bx, by, mx, my, ex, ey]);
     });
     const crossings = [];
     for (let i = 0, ii = arcs.length; i < ii; ++i) {
       for (let j = i + 1; j < ii; ++j) {
+        // Adjacent arcs (including ring closure pair) share an endpoint by
+        // construction. We don't skip them here — getArcArcCrossingPoints()
+        // filters near-shared-endpoint candidates, so any remaining crossing
+        // is a real "long way around" intersection (e.g. >180° arcs).
         if (arcsAreEqual(arcs[i], arcs[j], sameArcToleranceSq)) {
           continue;
         }
@@ -876,20 +881,22 @@ class CurvePolygon extends Geometry {
   }
 
   /**
-   * Call the callback for each arc across all rings with flat scalar coordinates.
+   * Call the callback for each curve segment across all rings with flat scalar
+   * coordinates. Curved segments have a non-collinear midpoint; linear segments
+   * have midpoint = segment center (collinear with endpoints).
    * @param {function(number, number, number, number, number, number, number): *} callback
-   *     Function called for each arc with (bx, by, mx, my, ex, ey, index).
+   *     Function called for each curve segment with (bx, by, mx, my, ex, ey, index).
    * @return {*} Value.
    * @api
    */
-  forEachArc(callback) {
+  forEachCurveSegment(callback) {
     const rings = this.rings_;
     let globalIndex = 0;
     for (let i = 0, ii = rings.length; i < ii; ++i) {
       const ring = rings[i];
       const type = ring.getType();
       if (type === 'CircularString' || type === 'CompoundCurve') {
-        const ret = ring.forEachArc(function (bx, by, mx, my, ex, ey) {
+        const ret = ring.forEachCurveSegment(function (bx, by, mx, my, ex, ey) {
           return callback(bx, by, mx, my, ex, ey, globalIndex++);
         });
         if (ret) {

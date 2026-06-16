@@ -2,6 +2,7 @@
  * @module ol/geom/flat/topology
  */
 import {
+  angleDistance,
   angleFromOrigin,
   containsAngle,
   getArcAngles,
@@ -165,7 +166,8 @@ export function getLineArcCrossingPoint(
   const center = getCircleCenter(bx, by, mx, my, ex, ey);
   if (!center) {
     // Arc is degenerate (line) — use line-line
-    return getLineLineCrossingPoint(x1, y1, x2, y2, bx, by, ex, ey);
+    const pt = getLineLineCrossingPoint(x1, y1, x2, y2, bx, by, ex, ey);
+    return pt ? [pt] : [];
   }
 
   const cx = center[0];
@@ -180,14 +182,14 @@ export function getLineArcCrossingPoint(
   const a = dx * dx + dy * dy;
   if (a < 1e-20) {
     // Degenerate zero-length line segment
-    return null;
+    return [];
   }
   const b = 2 * (fx * dx + fy * dy);
   const c = fx * fx + fy * fy - r * r;
   const disc = b * b - 4 * a * c;
 
   if (disc < 0) {
-    return null;
+    return [];
   }
 
   const sqrtDisc = Math.sqrt(disc);
@@ -196,6 +198,20 @@ export function getLineArcCrossingPoint(
   const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
   const cw = isArcClockwise(bx, by, mx, my, ex, ey);
 
+  // Compute arc sweep for angular tolerance calculation.
+  // For short arcs near shared boundaries, allow a small angular tolerance
+  // to catch crossings that fall in the gap between adjacent sub-arcs
+  // decomposed differently across features.
+  const sweepStart = !cw ? angles.startAngle : angles.endAngle;
+  const sweepEnd = !cw ? angles.endAngle : angles.startAngle;
+  let arcSweep = angleDistance(sweepStart, sweepEnd);
+  const sweepStartToMiddle = angleDistance(sweepStart, angles.middleAngle);
+  if (sweepStartToMiddle > arcSweep) {
+    arcSweep = 2 * Math.PI - arcSweep;
+  }
+  const angularTolerance = Math.min(0.01, arcSweep * 0.05);
+
+  const results = [];
   for (const t of tValues) {
     if (t <= 1e-9 || t >= 1 - 1e-9) {
       continue;
@@ -203,7 +219,10 @@ export function getLineArcCrossingPoint(
     const px = x1 + t * dx;
     const py = y1 + t * dy;
 
-    // Only skip crossings near SHARED endpoints (where line and arc meet).
+    // Skip crossings near SHARED endpoints (where a line endpoint coincides
+    // with an arc endpoint and the crossing is at that shared vertex).
+    // Uses both a spatial distance check (epsilonSq) and a parametric
+    // threshold to catch near-vertex artifacts on long line segments.
     let nearShared = false;
     const lineEps = [x1, y1, x2, y2];
     const arcEps = [bx, by, ex, ey];
@@ -212,9 +231,20 @@ export function getLineArcCrossingPoint(
         const sdx = lineEps[li] - arcEps[ai];
         const sdy = lineEps[li + 1] - arcEps[ai + 1];
         if (sdx * sdx + sdy * sdy < epsilonSq) {
+          // Spatial distance check
           const dpx = px - lineEps[li];
           const dpy = py - lineEps[li + 1];
           if (dpx * dpx + dpy * dpy < epsilonSq) {
+            nearShared = true;
+            break;
+          }
+          // Parametric check: reject crossings within 0.5% of line length
+          // from a shared endpoint (catches large-geometry artifacts)
+          if (li === 0 && t < 0.005) {
+            nearShared = true;
+            break;
+          }
+          if (li === 2 && t > 0.995) {
             nearShared = true;
             break;
           }
@@ -236,12 +266,13 @@ export function getLineArcCrossingPoint(
         cw,
         angles.middleAngle,
         angle,
+        angularTolerance,
       )
     ) {
-      return [px, py];
+      results.push([px, py]);
     }
   }
-  return null;
+  return results;
 }
 
 /**
@@ -288,7 +319,7 @@ export function getArcArcCrossingPoint(
     return getLineLineCrossingPoint(b1x, b1y, e1x, e1y, b2x, b2y, e2x, e2y);
   }
   if (isLine1) {
-    return getLineArcCrossingPoint(
+    const pts = getLineArcCrossingPoint(
       b1x,
       b1y,
       e1x,
@@ -301,9 +332,10 @@ export function getArcArcCrossingPoint(
       e2y,
       epsilonSq,
     );
+    return pts.length > 0 ? pts[0] : null;
   }
   if (isLine2) {
-    return getLineArcCrossingPoint(
+    const pts = getLineArcCrossingPoint(
       b2x,
       b2y,
       e2x,
@@ -316,6 +348,7 @@ export function getArcArcCrossingPoint(
       e1y,
       epsilonSq,
     );
+    return pts.length > 0 ? pts[0] : null;
   }
 
   const c1x = c1[0],
@@ -478,13 +511,13 @@ export function getArcArcCrossingPoints(
   const isLine1 = !c1 || getArcRadius(c1[0], c1[1], b1x, b1y) > DEGEN_RADIUS;
   const isLine2 = !c2 || getArcRadius(c2[0], c2[1], b2x, b2y) > DEGEN_RADIUS;
 
-  // For line-line or line-arc, at most 1 crossing
+  // For line-line, at most 1 crossing. For line-arc, up to 2 crossings.
   if (isLine1 && isLine2) {
     const pt = getLineLineCrossingPoint(b1x, b1y, e1x, e1y, b2x, b2y, e2x, e2y);
     return pt ? [pt] : [];
   }
   if (isLine1) {
-    const pt = getLineArcCrossingPoint(
+    return getLineArcCrossingPoint(
       b1x,
       b1y,
       e1x,
@@ -497,10 +530,9 @@ export function getArcArcCrossingPoints(
       e2y,
       epsilonSq,
     );
-    return pt ? [pt] : [];
   }
   if (isLine2) {
-    const pt = getLineArcCrossingPoint(
+    return getLineArcCrossingPoint(
       b2x,
       b2y,
       e2x,
@@ -513,7 +545,6 @@ export function getArcArcCrossingPoints(
       e1y,
       epsilonSq,
     );
-    return pt ? [pt] : [];
   }
 
   const c1x = c1[0],
@@ -587,18 +618,35 @@ export function getArcArcCrossingPoints(
     const ptx = candidates[i];
     const pty = candidates[i + 1];
 
-    // Only skip crossings near SHARED endpoints (where both arcs meet).
+    // Skip crossings near a shared endpoint between the two arcs.
+    // When arc1's begin/end coincides with arc2's begin/end, the crossing
+    // at that point is a vertex meeting, not a true transversal crossing.
+    // Uses both spatial distance and a proportional threshold to catch
+    // near-vertex artifacts on large-radius arcs.
     let nearSharedEndpoint = false;
-    const eps1s = [b1x, b1y, e1x, e1y];
-    const eps2s = [b2x, b2y, e2x, e2y];
-    for (let j = 0; j < 4; j += 2) {
-      for (let k = 0; k < 4; k += 2) {
-        const sdx = eps1s[j] - eps2s[k];
-        const sdy = eps1s[j + 1] - eps2s[k + 1];
+    const eps1 = [b1x, b1y, e1x, e1y];
+    const eps2 = [b2x, b2y, e2x, e2y];
+    for (let ei = 0; ei < 4; ei += 2) {
+      for (let ej = 0; ej < 4; ej += 2) {
+        const sdx = eps1[ei] - eps2[ej];
+        const sdy = eps1[ei + 1] - eps2[ej + 1];
         if (sdx * sdx + sdy * sdy < epsilonSq) {
-          const dpx = ptx - eps1s[j];
-          const dpy = pty - eps1s[j + 1];
-          if (dpx * dpx + dpy * dpy < epsilonSq) {
+          // These endpoints are shared; skip if the crossing is near them
+          const dpx = ptx - eps1[ei];
+          const dpy = pty - eps1[ei + 1];
+          const distSq = dpx * dpx + dpy * dpy;
+          if (distSq < epsilonSq) {
+            nearSharedEndpoint = true;
+            break;
+          }
+          // Proportional check: reject crossings within 0.5% of the
+          // shorter arc chord from the shared endpoint
+          const chord1Sq =
+            (e1x - b1x) * (e1x - b1x) + (e1y - b1y) * (e1y - b1y);
+          const chord2Sq =
+            (e2x - b2x) * (e2x - b2x) + (e2y - b2y) * (e2y - b2y);
+          const threshold = Math.min(chord1Sq, chord2Sq) * 25e-6;
+          if (distSq < threshold) {
             nearSharedEndpoint = true;
             break;
           }

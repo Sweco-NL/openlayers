@@ -16,8 +16,8 @@ import {inflateCoordinatesArray} from './flat/inflate.js';
 import {getInteriorPointOfArray} from './flat/interiorpoint.js';
 import {intersectsLinearRingArray} from './flat/intersectsextent.js';
 import {linearRingsAreOriented, orientLinearRings} from './flat/orient.js';
-import {quantizeArray} from './flat/simplify.js';
 import {forEach} from './flat/segments.js';
+import {quantizeArray} from './flat/simplify.js';
 
 /**
  * @classdesc

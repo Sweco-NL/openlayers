@@ -130,6 +130,10 @@ describe('ol/geom/CircularString.js', function () {
         const mid = cs.getCoordinateAt(0.5);
         expect(mid).to.be.an(Array);
         expect(mid.length).to.be(2);
+        // Quarter arc centered at origin, r=5; midpoint at 45° ≈ (3.535, 3.535)
+        const expected = (Math.SQRT2 / 2) * 5;
+        expect(mid[0]).to.roughlyEqual(expected, 0.01);
+        expect(mid[1]).to.roughlyEqual(expected, 0.01);
       });
     });
 
@@ -171,6 +175,9 @@ describe('ol/geom/CircularString.js', function () {
         const closestPoint = [0, 0];
         const sqDist = cs.closestPointXY(5, 0, closestPoint, Infinity);
         expect(sqDist).to.be.lessThan(0.01);
+        // Closest point to (5,0) should be (5,0) itself (it's an endpoint)
+        expect(closestPoint[0]).to.roughlyEqual(5, 0.01);
+        expect(closestPoint[1]).to.roughlyEqual(0, 0.01);
       });
     });
 
@@ -621,8 +628,8 @@ describe('ol/geom/CircularString.js', function () {
     });
   });
 
-  describe('#forEachArc()', function () {
-    it('calls callback once per arc with bx,by,mx,my,ex,ey,index', function () {
+  describe('#forEachCurveSegment()', function () {
+    it('calls callback once per curve segment with bx,by,mx,my,ex,ey,index', function () {
       const cs = new CircularString([
         [0, 0],
         [1, 1],
@@ -631,7 +638,7 @@ describe('ol/geom/CircularString.js', function () {
         [4, 0],
       ]);
       const segments = [];
-      cs.forEachArc(function (bx, by, mx, my, ex, ey, index) {
+      cs.forEachCurveSegment(function (bx, by, mx, my, ex, ey, index) {
         segments.push({bx, by, mx, my, ex, ey, index});
       });
       expect(segments.length).to.be(2);
@@ -650,7 +657,7 @@ describe('ol/geom/CircularString.js', function () {
         [1, 1],
         [2, 0],
       ]);
-      const ret = cs.forEachArc(function () {});
+      const ret = cs.forEachCurveSegment(function () {});
       expect(ret).to.be(false);
     });
 
@@ -663,7 +670,7 @@ describe('ol/geom/CircularString.js', function () {
         [4, 0],
       ]);
       let count = 0;
-      const ret = cs.forEachArc(function () {
+      const ret = cs.forEachCurveSegment(function () {
         count++;
         return 'stop';
       });
@@ -726,8 +733,8 @@ describe('ol/geom/CircularString.js', function () {
         [0, 5],
         [-5, 0],
       ]);
-      const flat = cs.tessellate(36);
-      // stride 2, 37 points (36 segments + 1)
+      const flat = cs.tessellate();
+      // stride 2, 37 points (36 segments + 1) for a semicircle (~5° step)
       expect(flat.length).to.be(74);
       // starts at (5, 0)
       expect(flat[0]).to.roughlyEqual(5, 1e-9);
@@ -1246,7 +1253,7 @@ describe('ol/geom/CircularString.js', function () {
         [1.1234567890123, 2.9876543210987],
         [3.1415926535897, 4.2718281828459],
         [5.5772156649015, 6.6931471805599],
-        [7.3890560989306, 8.4142135623730],
+        [7.3890560989306, 8.414213562373],
         [1.1234567890123, 2.9876543210987],
       ]);
       const cp = new CurvePolygon([ring]);

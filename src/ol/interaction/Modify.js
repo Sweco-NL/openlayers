@@ -30,6 +30,11 @@ import {
 } from '../extent.js';
 import Point from '../geom/Point.js';
 import {fromCircle} from '../geom/Polygon.js';
+import {
+  getArcBoundingCoords,
+  getCircleCenter,
+  isArcClockwise,
+} from '../geom/flat/arc.js';
 import VectorLayer from '../layer/Vector.js';
 import {
   fromUserCoordinate,
@@ -52,11 +57,6 @@ import {
   getTraceTargetUpdate,
   getTraceTargets,
 } from './tracing.js';
-import {
-  getArcBoundingCoords,
-  getCircleCenter,
-  isArcClockwise,
-} from '../geom/flat/arc.js';
 
 /**
  * The segment index assigned to a circle's center when
@@ -2084,8 +2084,7 @@ class Modify extends PointerInteraction {
       // If a control point endpoint is within boosted tolerance, use that
       // node and override the closest-arc selection.
       const useEndpointNode =
-        bestEndpointNode &&
-        bestEndpointDist <= this.pixelTolerance_ * 3;
+        bestEndpointNode && bestEndpointDist <= this.pixelTolerance_ * 3;
 
       const effectiveNode = useEndpointNode ? bestEndpointNode : node;
       const closestSegment = effectiveNode.segment;
@@ -2094,13 +2093,20 @@ class Modify extends PointerInteraction {
         // Jump directly to the control point endpoint
         vertex = bestEndpointIsSecond ? closestSegment[1] : closestSegment[0];
       } else {
-        vertex = closestOnSegmentData(pixelCoordinate, effectiveNode, projection);
+        vertex = closestOnSegmentData(
+          pixelCoordinate,
+          effectiveNode,
+          projection,
+        );
       }
       const vertexPixel = map.getPixelFromCoordinate(vertex);
       let dist = useEndpointNode
         ? bestEndpointDist
         : coordinateDistance(pixel, vertexPixel);
-      if (hitPointGeometry || dist <= this.pixelTolerance_ * (useEndpointNode ? 3 : 1)) {
+      if (
+        hitPointGeometry ||
+        dist <= this.pixelTolerance_ * (useEndpointNode ? 3 : 1)
+      ) {
         /** @type {Object<string, boolean>} */
         const vertexSegments = {};
         vertexSegments[getUid(closestSegment)] = true;
@@ -2182,8 +2188,6 @@ class Modify extends PointerInteraction {
                 geometries[geometryUid] = true;
                 vertexSegments[getUid(segment)] = true;
               }
-            } else {
-              break;
             }
           }
         }
@@ -2293,10 +2297,7 @@ class Modify extends PointerInteraction {
         // arcMid (first half) or between arcMid and arcEnd (second half).
         let vertexAngle = Math.atan2(vertex[1] - cy, vertex[0] - cx);
         let midAngleCheck = Math.atan2(arcMid[1] - cy, arcMid[0] - cx);
-        let startAngleCheck = Math.atan2(
-          arcStart[1] - cy,
-          arcStart[0] - cx,
-        );
+        let startAngleCheck = Math.atan2(arcStart[1] - cy, arcStart[0] - cx);
         if (vertexAngle < 0) {
           vertexAngle += 2 * Math.PI;
         }
@@ -2310,23 +2311,21 @@ class Modify extends PointerInteraction {
         if (cw) {
           // CW: first half sweep is from startAngle decreasing to midAngle
           const firstHalfSweep =
-            ((startAngleCheck - midAngleCheck) % (2 * Math.PI) +
+            (((startAngleCheck - midAngleCheck) % (2 * Math.PI)) +
               2 * Math.PI) %
             (2 * Math.PI);
           const vertexFromStart =
-            ((startAngleCheck - vertexAngle) % (2 * Math.PI) +
-              2 * Math.PI) %
+            (((startAngleCheck - vertexAngle) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
           isFirstHalf = vertexFromStart <= firstHalfSweep;
         } else {
           // CCW: first half sweep is from startAngle increasing to midAngle
           const firstHalfSweep =
-            ((midAngleCheck - startAngleCheck) % (2 * Math.PI) +
+            (((midAngleCheck - startAngleCheck) % (2 * Math.PI)) +
               2 * Math.PI) %
             (2 * Math.PI);
           const vertexFromStart =
-            ((vertexAngle - startAngleCheck) % (2 * Math.PI) +
-              2 * Math.PI) %
+            (((vertexAngle - startAngleCheck) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
           isFirstHalf = vertexFromStart <= firstHalfSweep;
         }
@@ -2361,11 +2360,11 @@ class Modify extends PointerInteraction {
         let subSweep;
         if (cw) {
           subSweep =
-            ((startAngle - endAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (((startAngle - endAngle) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
         } else {
           subSweep =
-            ((endAngle - startAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (((endAngle - startAngle) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
         }
         if (subSweep > 0 && subSweep < MIN_SWEEP) {
@@ -2391,12 +2390,12 @@ class Modify extends PointerInteraction {
         let otherSweep;
         if (cw) {
           otherSweep =
-            ((otherStartAngle - otherEndAngle) % (2 * Math.PI) +
+            (((otherStartAngle - otherEndAngle) % (2 * Math.PI)) +
               2 * Math.PI) %
             (2 * Math.PI);
         } else {
           otherSweep =
-            ((otherEndAngle - otherStartAngle) % (2 * Math.PI) +
+            (((otherEndAngle - otherStartAngle) % (2 * Math.PI)) +
               2 * Math.PI) %
             (2 * Math.PI);
         }
@@ -2407,7 +2406,7 @@ class Modify extends PointerInteraction {
         let midAngle;
         if (cw) {
           let sweep =
-            ((startAngle - endAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (((startAngle - endAngle) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
           if (sweep === 0) {
             sweep = 2 * Math.PI;
@@ -2415,7 +2414,7 @@ class Modify extends PointerInteraction {
           midAngle = startAngle - sweep / 2;
         } else {
           let sweep =
-            ((endAngle - startAngle) % (2 * Math.PI) + 2 * Math.PI) %
+            (((endAngle - startAngle) % (2 * Math.PI)) + 2 * Math.PI) %
             (2 * Math.PI);
           if (sweep === 0) {
             sweep = 2 * Math.PI;
@@ -2483,14 +2482,7 @@ class Modify extends PointerInteraction {
           const ab = newCoords[ai],
             am = newCoords[ai + 1],
             ae = newCoords[ai + 2];
-          const ac = getCircleCenter(
-            ab[0],
-            ab[1],
-            am[0],
-            am[1],
-            ae[0],
-            ae[1],
-          );
+          const ac = getCircleCenter(ab[0], ab[1], am[0], am[1], ae[0], ae[1]);
           let ext;
           if (ac) {
             const bc = getArcBoundingCoords(

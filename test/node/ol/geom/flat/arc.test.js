@@ -1,14 +1,14 @@
 import {
-  angleFromOrigin,
   angleDistance,
+  angleFromOrigin,
   containsAngle,
-  getCircleCenter,
-  getArcRadius,
   getArcAngles,
+  getArcBoundingCoords,
+  getArcRadius,
+  getCircleCenter,
   isArcClockwise,
   isFullCircle,
   splitArcAtAngle,
-  getArcBoundingCoords,
 } from '../../../../../src/ol/geom/flat/arc.js';
 import expect from '../../../expect.js';
 
@@ -16,23 +16,14 @@ describe('ol/geom/flat/arc.js', () => {
   describe('angleFromOrigin', () => {
     it('returns the expected value in simple cases', () => {
       expect(angleFromOrigin(0, 0, 5, 0)).to.roughlyEqual(0.0, 1e-9);
-      expect(angleFromOrigin(0, 0, 5, 5)).to.roughlyEqual(
-        Math.PI * 0.25,
-        1e-9,
-      );
-      expect(angleFromOrigin(0, 0, 0, 5)).to.roughlyEqual(
-        Math.PI * 0.5,
-        1e-9,
-      );
+      expect(angleFromOrigin(0, 0, 5, 5)).to.roughlyEqual(Math.PI * 0.25, 1e-9);
+      expect(angleFromOrigin(0, 0, 0, 5)).to.roughlyEqual(Math.PI * 0.5, 1e-9);
       expect(angleFromOrigin(0, 0, -5, 0)).to.roughlyEqual(Math.PI, 1e-9);
       expect(angleFromOrigin(0, 0, -5, -5)).to.roughlyEqual(
         Math.PI * 1.25,
         1e-9,
       );
-      expect(angleFromOrigin(0, 0, 0, -5)).to.roughlyEqual(
-        Math.PI * 1.5,
-        1e-9,
-      );
+      expect(angleFromOrigin(0, 0, 0, -5)).to.roughlyEqual(Math.PI * 1.5, 1e-9);
       expect(angleFromOrigin(0, 0, 5, -5)).to.roughlyEqual(
         Math.PI * 1.75,
         1e-9,
@@ -41,10 +32,7 @@ describe('ol/geom/flat/arc.js', () => {
 
     it('works with non-zero origin', () => {
       expect(angleFromOrigin(3, 4, 8, 4)).to.roughlyEqual(0.0, 1e-9);
-      expect(angleFromOrigin(3, 4, 3, 9)).to.roughlyEqual(
-        Math.PI * 0.5,
-        1e-9,
-      );
+      expect(angleFromOrigin(3, 4, 3, 9)).to.roughlyEqual(Math.PI * 0.5, 1e-9);
     });
   });
 
@@ -208,17 +196,7 @@ describe('ol/geom/flat/arc.js', () => {
 
     it('produces valid sub-arcs for CW arc', () => {
       // CW arc: (1,0) → (0,-1) → (-1,0), center at (0,0)
-      const result = splitArcAtAngle(
-        1,
-        0,
-        0,
-        -1,
-        -1,
-        0,
-        0,
-        0,
-        Math.PI * 1.5,
-      );
+      const result = splitArcAtAngle(1, 0, 0, -1, -1, 0, 0, 0, Math.PI * 1.5);
       expect(result).not.to.be(null);
       // Split point at 270° = (0, -1)
       expect(result[4]).to.roughlyEqual(0, 1e-6);
@@ -232,6 +210,17 @@ describe('ol/geom/flat/arc.js', () => {
       const coords = getArcBoundingCoords(1, 0, 0, 1, 1, 0, 0, 0);
       // Should contain top, right, bottom, left extremes
       expect(coords.length).to.be(8); // 4 points × 2 coords
+      // Verify the extreme values are present in the flat array
+      const xs = [];
+      const ys = [];
+      for (let i = 0; i < coords.length; i += 2) {
+        xs.push(coords[i]);
+        ys.push(coords[i + 1]);
+      }
+      expect(Math.max(...xs)).to.roughlyEqual(1, 1e-6);
+      expect(Math.min(...xs)).to.roughlyEqual(-1, 1e-6);
+      expect(Math.max(...ys)).to.roughlyEqual(1, 1e-6);
+      expect(Math.min(...ys)).to.roughlyEqual(-1, 1e-6);
     });
 
     it('includes endpoints and relevant extremes', () => {
@@ -252,6 +241,90 @@ describe('ol/geom/flat/arc.js', () => {
       const coords = getArcBoundingCoords(1, 0, 0, 1, -1, 0, 0, 0);
       // Endpoints: (1,0), (-1,0) + top extreme (0,1)
       expect(coords.length).to.be(6); // 3 points × 2 coords
+      // Verify top extreme (0,1) is among the points
+      let foundTop = false;
+      for (let i = 0; i < coords.length; i += 2) {
+        if (Math.abs(coords[i]) < 1e-6 && Math.abs(coords[i + 1] - 1) < 1e-6) {
+          foundTop = true;
+        }
+      }
+      expect(foundTop).to.be(true);
+    });
+  });
+
+  describe('near-degenerate edge cases', () => {
+    it('getCircleCenter with nearly-collinear points returns null', () => {
+      // Three nearly-collinear points: cross product ≈ 0, below EPSILON
+      const center = getCircleCenter(0, 0, 1, 1e-12, 2, 0);
+      // Points are effectively collinear — should return null
+      expect(center).to.be(null);
+    });
+
+    it('getCircleCenter with slightly off-collinear points returns large radius', () => {
+      // Cross product just above EPSILON threshold
+      const eps = 1e-6;
+      const center = getCircleCenter(0, 0, 1, eps, 2, 0);
+      expect(center).to.be.an(Array);
+      const r = Math.sqrt(center[0] ** 2 + center[1] ** 2);
+      expect(r).to.be.greaterThan(100);
+    });
+
+    it('getArcAngles spanning the 0/2π boundary', () => {
+      // Arc from 350° to 10° CCW (crossing 0°)
+      const startAngle = (350 * Math.PI) / 180;
+      const midAngle = 0;
+      const endAngle = (10 * Math.PI) / 180;
+      const r = 1;
+      const x1 = r * Math.cos(startAngle),
+        y1 = r * Math.sin(startAngle);
+      const xm = r * Math.cos(midAngle),
+        ym = r * Math.sin(midAngle);
+      const x2 = r * Math.cos(endAngle),
+        y2 = r * Math.sin(endAngle);
+      const cx = 0,
+        cy = 0;
+      const angles = getArcAngles(x1, y1, xm, ym, x2, y2, cx, cy);
+      expect(angles).to.be.an('object');
+      expect(angles.startAngle).to.be.a('number');
+      expect(angles.endAngle).to.be.a('number');
+    });
+
+    it('containsAngle at exact boundary angle', () => {
+      // CCW sweep from 0 to π, middle at π/2
+      expect(containsAngle(0, Math.PI, false, Math.PI / 2, 0)).to.be(true);
+      expect(containsAngle(0, Math.PI, false, Math.PI / 2, Math.PI)).to.be(
+        true,
+      );
+      // Just outside
+      expect(
+        containsAngle(0, Math.PI, false, Math.PI / 2, Math.PI + 0.1),
+      ).to.be(false);
+    });
+
+    it('getArcBoundingCoords arc barely crossing top extreme', () => {
+      // Arc from 80° to 100° CCW (barely crossing 90°/top)
+      const r = 1;
+      const a1 = (80 * Math.PI) / 180;
+      const am = (90 * Math.PI) / 180;
+      const a2 = (100 * Math.PI) / 180;
+      const coords = getArcBoundingCoords(
+        r * Math.cos(a1),
+        r * Math.sin(a1),
+        r * Math.cos(am),
+        r * Math.sin(am),
+        r * Math.cos(a2),
+        r * Math.sin(a2),
+        0,
+        0,
+      );
+      // Should include top extreme (0, 1)
+      let foundTop = false;
+      for (let i = 0; i < coords.length; i += 2) {
+        if (Math.abs(coords[i]) < 0.01 && Math.abs(coords[i + 1] - 1) < 0.01) {
+          foundTop = true;
+        }
+      }
+      expect(foundTop).to.be(true);
     });
   });
 });

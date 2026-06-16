@@ -47,6 +47,11 @@ describe('ol/geom/CompoundCurve.js', function () {
     it('has the expected flat coordinates', function () {
       const flat = cc.getFlatCoordinates();
       expect(flat.length).to.be(8);
+      // First point (0,0), last point (3,1)
+      expect(flat[0]).to.be(0);
+      expect(flat[1]).to.be(0);
+      expect(flat[6]).to.be(3);
+      expect(flat[7]).to.be(1);
     });
 
     it('has the expected stride', function () {
@@ -419,8 +424,8 @@ describe('ol/geom/CompoundCurve.js', function () {
     });
   });
 
-  describe('#forEachArc()', function () {
-    it('iterates raw arc triples and line pairs', function () {
+  describe('#forEachCurveSegment()', function () {
+    it('iterates curved and linear segments', function () {
       const arc = new CircularString([
         [0, 0],
         [1, 1],
@@ -432,7 +437,7 @@ describe('ol/geom/CompoundCurve.js', function () {
       ]);
       const cc = new CompoundCurve([arc, line]);
       let count = 0;
-      cc.forEachArc(function () {
+      cc.forEachCurveSegment(function () {
         count++;
       });
       // 1 arc segment (3-arg) + 1 line segment (2-arg) = 2
@@ -537,7 +542,7 @@ describe('ol/geom/CompoundCurve.js', function () {
     });
 
     it('updates the extent', function () {
-      const extent1 = cc.getExtent();
+      cc.getExtent();
       const newArc = new CircularString([
         [100, 100],
         [101, 101],
@@ -914,6 +919,114 @@ describe('ol/geom/CompoundCurve.js', function () {
       ]);
       const cc = new CompoundCurve([line]);
       expect(cc.getLength()).to.roughlyEqual(5, 1e-9);
+    });
+  });
+
+  describe('cache invalidation', function () {
+    it('getFlatCoordinates updates after sub-geometry modification', function () {
+      const line = new LineString([
+        [0, 0],
+        [10, 0],
+      ]);
+      const cc = new CompoundCurve([line]);
+      const flat1 = cc.getFlatCoordinates();
+      expect(flat1[2]).to.be(10);
+
+      line.setCoordinates([
+        [0, 0],
+        [20, 0],
+      ]);
+      const flat2 = cc.getFlatCoordinates();
+      expect(flat2[2]).to.be(20);
+    });
+
+    it('getFlatCoordinates updates after setGeometries', function () {
+      const line1 = new LineString([
+        [0, 0],
+        [5, 0],
+      ]);
+      const cc = new CompoundCurve([line1]);
+      expect(cc.getFlatCoordinates().length).to.be(4);
+
+      const arc = new CircularString([
+        [0, 0],
+        [5, 5],
+        [10, 0],
+      ]);
+      cc.setGeometries([arc]);
+      const flat = cc.getFlatCoordinates();
+      expect(flat.length).to.be.greaterThan(4);
+    });
+
+    it('getFlatCoordinates updates after CircularString sub-geometry changes', function () {
+      const arc = new CircularString([
+        [0, 0],
+        [5, 5],
+        [10, 0],
+      ]);
+      const cc = new CompoundCurve([arc]);
+      cc.getFlatCoordinates();
+
+      arc.setCoordinates([
+        [0, 0],
+        [10, 10],
+        [20, 0],
+      ]);
+      const flat2 = cc.getFlatCoordinates();
+      // New arc is larger, tessellation may differ
+      expect(flat2[flat2.length - 2]).to.be(20);
+    });
+  });
+
+  describe('#getCurveSegmentAt()', function () {
+    let arc, line, cc;
+    beforeEach(function () {
+      // Half-circle from (5,0) through (0,5) to (-5,0), then straight to (-15,0).
+      arc = new CircularString([
+        [5, 0],
+        [0, 5],
+        [-5, 0],
+      ]);
+      line = new LineString([
+        [-5, 0],
+        [-15, 0],
+      ]);
+      cc = new CompoundCurve([arc, line]);
+    });
+
+    it('returns the arc sub-segment for a coordinate exactly on the arc', function () {
+      const seg = cc.getCurveSegmentAt([0, 5]);
+      expect(seg).to.be(arc);
+    });
+
+    it('returns the line sub-segment for a coordinate exactly on the line', function () {
+      const seg = cc.getCurveSegmentAt([-10, 0]);
+      expect(seg).to.be(line);
+    });
+
+    it('returns the lower-index sub-segment at a junction (deterministic)', function () {
+      // (-5,0) is the shared junction between arc and line.
+      // arc is geometries_[0], line is geometries_[1]; arc must win.
+      const seg = cc.getCurveSegmentAt([-5, 0]);
+      expect(seg).to.be(arc);
+    });
+
+    it('returns undefined for a coordinate outside the default (0) tolerance', function () {
+      // Well off any sub-segment.
+      const seg = cc.getCurveSegmentAt([100, 100]);
+      expect(seg).to.be(undefined);
+    });
+
+    it('returns a sub-segment when a coordinate is within the given tolerance', function () {
+      // Slightly off the line (-10, 0.5) - within tolerance 1 (distance = 0.5).
+      const seg = cc.getCurveSegmentAt([-10, 0.5], 1);
+      expect(seg).to.be(line);
+    });
+
+    it('returns undefined when a coordinate is outside the given tolerance', function () {
+      // (-10, 2) is 2 units off the line; tolerance 1 should reject.
+      const seg = cc.getCurveSegmentAt([-10, 2], 1);
+      expect(seg).to.be(undefined);
     });
   });
 });

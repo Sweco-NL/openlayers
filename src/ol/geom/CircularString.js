@@ -24,6 +24,37 @@ import {deflateCoordinates} from './flat/deflate.js';
 import {inflateCoordinates} from './flat/inflate.js';
 
 /**
+ * Default angular step in radians (~5° per segment, same as legacy 36-for-semicircle).
+ * @type {number}
+ */
+const DEFAULT_ANGULAR_STEP = Math.PI / 36;
+
+/**
+ * Compute the number of tessellation segments for an arc, given its radius,
+ * absolute sweep angle, and an optional tolerance (max chord-to-arc error).
+ * When tolerance is not provided, uses a fixed angular step of ~5°.
+ * @param {number} radius Arc radius.
+ * @param {number} absSweep Absolute sweep angle in radians.
+ * @param {number} [tolerance] Max chord-to-arc deviation in coordinate units.
+ * @return {number} Number of segments, clamped to [4, 512].
+ */
+function computeSegmentCount(radius, absSweep, tolerance) {
+  let n;
+  if (tolerance !== undefined && tolerance > 0) {
+    const ratio = tolerance / radius;
+    if (ratio >= 1) {
+      n = 4;
+    } else {
+      n = Math.ceil(absSweep / (2 * Math.acos(1 - ratio)));
+    }
+  } else {
+    // Default: fixed angular resolution of ~5° per segment
+    n = Math.ceil(absSweep / DEFAULT_ANGULAR_STEP);
+  }
+  return Math.max(4, Math.min(512, n));
+}
+
+/**
  * @classdesc
  * CircularString geometry.
  *
@@ -709,9 +740,7 @@ class CircularString extends SimpleGeometry {
    */
   setCoordinates(coordinates, layout) {
     assert(
-      !coordinates ||
-        coordinates.length === 0 ||
-        coordinates.length % 2 === 1,
+      !coordinates || coordinates.length === 0 || coordinates.length % 2 === 1,
       `CircularString requires an odd number of points (≥3), got ${coordinates ? coordinates.length : 0}`,
     );
     this.setLayout(layout, coordinates, 1);
@@ -729,16 +758,18 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
-   * Call the callback for each arc with flat scalar coordinates.
+   * Call the callback for each curve segment with flat scalar coordinates.
+   * Curved segments have a non-collinear midpoint; straight (linear) segments
+   * have midpoint = segment center (collinear with endpoints).
    * If the callback returns a truthy value, iteration stops and that value
    * is returned. Otherwise the function returns `false`.
    * @param {function(number, number, number, number, number, number, number): T} callback
-   *     Function called for each arc with (bx, by, mx, my, ex, ey, index).
+   *     Function called for each curve segment with (bx, by, mx, my, ex, ey, index).
    * @return {T|boolean} Value.
    * @template T
    * @api
    */
-  forEachArc(callback) {
+  forEachCurveSegment(callback) {
     const flat = this.flatCoordinates;
     const stride = this.stride;
     const count = this.arcCount();
@@ -1020,14 +1051,19 @@ class CircularString extends SimpleGeometry {
 
   /**
    * Returns tessellated (densified) flat coordinates approximating the arcs
-   * as polyline segments. Each arc is subdivided into `pointsPerArc` segments.
-   * The output uses stride 2 (X, Y only).
-   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * as polyline segments. The output uses stride 2 (X, Y only).
+   *
+   * When `tolerance` is provided, each arc is subdivided adaptively so that
+   * the maximum chord-to-arc deviation does not exceed `tolerance` coordinate
+   * units. When omitted, a default angular step of ~5° is used (equivalent to
+   * 36 segments for a semicircular arc), scaled proportionally to each arc's
+   * sweep angle.
+   *
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units.
    * @return {Array<number>} Flat coordinates with stride 2.
    * @api
    */
-  tessellate(pointsPerArc) {
-    const numSeg = pointsPerArc || 36;
+  tessellate(tolerance) {
     const count = this.arcCount();
     if (count === 0) {
       return [];
@@ -1068,6 +1104,8 @@ class CircularString extends SimpleGeometry {
       } else {
         sweep = angleDistance(angles.startAngle, angles.endAngle);
       }
+      const absSweep = Math.abs(sweep);
+      const numSeg = computeSegmentCount(radius, absSweep, tolerance);
       // Compute the tessellation step closest to the through-point so we
       // can replace it with the exact control-point coordinate.
       let midStep = -1;
@@ -1114,13 +1152,13 @@ class CircularString extends SimpleGeometry {
    * This provides the bridge between curve geometry and flat-coordinate
    * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).
    *
-   * @param {number} [pointsPerArc] Points per arc (default 36).
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units.
    * @return {{flatCoordinates: Array<number>, ends: Array<number>, stride: number}}
    *   Tessellated flat coordinates with end indices and stride.
    * @api
    */
-  getTessellatedFlatData(pointsPerArc) {
-    const flatCoordinates = this.tessellate(pointsPerArc);
+  getTessellatedFlatData(tolerance) {
+    const flatCoordinates = this.tessellate(tolerance);
     return {
       flatCoordinates,
       ends: [flatCoordinates.length],

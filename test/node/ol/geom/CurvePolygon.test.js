@@ -47,6 +47,11 @@ describe('ol/geom/CurvePolygon.js', function () {
     it('has the expected flat coordinates', function () {
       const flat = cp.getFlatCoordinates();
       expect(flat.length).to.be(10);
+      // Verify actual coordinate values from the ring
+      expect(flat[0]).to.be(0);
+      expect(flat[1]).to.be(0);
+      expect(flat[2]).to.be(10);
+      expect(flat[3]).to.be(0);
     });
 
     it('has the expected stride', function () {
@@ -856,6 +861,41 @@ describe('ol/geom/CurvePolygon.js', function () {
     });
   });
 
+  describe('#getTessellatedFlatData()', function () {
+    it('returns arrays owned by the caller (not shared internal buffers)', function () {
+      const ring = new CircularString([
+        [5, 0],
+        [-5, 0],
+        [5, 0],
+      ]);
+      const cp = new CurvePolygon([ring]);
+      const first = cp.getTessellatedFlatData();
+      const second = cp.getTessellatedFlatData();
+      // Caller may store the returned arrays in a cache without aliasing.
+      expect(first.flatCoordinates).not.to.be(second.flatCoordinates);
+      expect(first.ends).not.to.be(second.ends);
+      // Mutating one must not affect the other or the underlying geometry.
+      const originalLength = first.flatCoordinates.length;
+      first.flatCoordinates.length = 0;
+      expect(second.flatCoordinates.length).to.be(originalLength);
+      const refetched = cp.getTessellatedFlatData();
+      expect(refetched.flatCoordinates.length).to.be(originalLength);
+    });
+
+    it('returns valid data with ends matching flatCoordinates length', function () {
+      const ring = new CircularString([
+        [5, 0],
+        [-5, 0],
+        [5, 0],
+      ]);
+      const cp = new CurvePolygon([ring]);
+      const data = cp.getTessellatedFlatData();
+      expect(data.stride).to.be(2);
+      expect(data.ends.length).to.be(1);
+      expect(data.ends[0]).to.be(data.flatCoordinates.length);
+    });
+  });
+
   describe('degenerate ring arcs', function () {
     it('handles a CurvePolygon with a collinear arc ring', function () {
       const ring = new CircularString([
@@ -1225,6 +1265,74 @@ describe('ol/geom/CurvePolygon.js', function () {
       // interior point should be inside the polygon
       const coords = interior.getCoordinates();
       expect(cp.containsXY(coords[0], coords[1])).to.be(true);
+    });
+  });
+
+  describe('cache invalidation', function () {
+    it('getFlatCoordinates updates after sub-ring modification', function () {
+      const ring = new LineString([
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 10],
+        [0, 0],
+      ]);
+      const cp = new CurvePolygon([ring]);
+      const flat1 = cp.getFlatCoordinates();
+      expect(flat1[2]).to.be(10);
+
+      ring.setCoordinates([
+        [0, 0],
+        [20, 0],
+        [20, 20],
+        [0, 20],
+        [0, 0],
+      ]);
+      const flat2 = cp.getFlatCoordinates();
+      expect(flat2[2]).to.be(20);
+    });
+
+    it('getEnds updates after sub-ring modification', function () {
+      const ring = new LineString([
+        [0, 0],
+        [5, 0],
+        [5, 5],
+        [0, 0],
+      ]);
+      const cp = new CurvePolygon([ring]);
+      const ends1 = cp.getEnds();
+      expect(ends1[0]).to.be(8);
+
+      ring.setCoordinates([
+        [0, 0],
+        [5, 0],
+        [5, 5],
+        [2, 3],
+        [0, 0],
+      ]);
+      const ends2 = cp.getEnds();
+      expect(ends2[0]).to.be(10);
+    });
+
+    it('getFlatCoordinates updates after setRings', function () {
+      const ring1 = new LineString([
+        [0, 0],
+        [10, 0],
+        [10, 10],
+        [0, 0],
+      ]);
+      const cp = new CurvePolygon([ring1]);
+      expect(cp.getFlatCoordinates().length).to.be(8);
+
+      const ring2 = new LineString([
+        [0, 0],
+        [20, 0],
+        [20, 20],
+        [10, 20],
+        [0, 0],
+      ]);
+      cp.setRings([ring2]);
+      expect(cp.getFlatCoordinates().length).to.be(10);
     });
   });
 });

@@ -1,10 +1,10 @@
 /**
  * @module ol/format/WKT
  */
+import Feature from '../Feature.js';
 import CircularString from '../geom/CircularString.js';
 import CompoundCurve from '../geom/CompoundCurve.js';
 import CurvePolygon from '../geom/CurvePolygon.js';
-import Feature from '../Feature.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
 import MultiLineString from '../geom/MultiLineString.js';
@@ -1007,7 +1007,9 @@ function encodeCurvePolygonGeometry(geom) {
     switch (type) {
       case 'LineString':
         encodedRing =
-          '(' + encodeLineStringGeometry(/** @type {LineString} */ (ring)) + ')';
+          '(' +
+          encodeLineStringGeometry(/** @type {LineString} */ (ring)) +
+          ')';
         break;
       case 'CircularString':
         encodedRing =

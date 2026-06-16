@@ -43,6 +43,7 @@ import {
   getTraceTargetUpdate,
   getTraceTargets,
   interpolateCoordinate,
+  isTraceTargetVertexIndex,
 } from './tracing.js';
 
 /**
@@ -104,6 +105,9 @@ import {
  * Shift key activates freehand drawing.
  * @property {boolean|import("../events/condition.js").Condition} [trace=false] Trace a portion of another geometry.
  * Ignored when in freehand mode.
+ * @property {boolean} [traceBacktracking=true] Allow tracing to remove
+ * previously traced coordinates when the pointer moves backward along the
+ * current trace target or switches to another target.
  * @property {VectorSource} [traceSource] Source for features to trace.  If tracing is active and a `traceSource` is
  * not provided, the interaction's `source` will be used.  Tracing requires that the interaction is configured with
  * either a `traceSource` or a `source`.
@@ -198,8 +202,10 @@ export class DrawEvent extends Event {
    * @param {DrawEventType} type Type.
    * @param {Feature} feature The feature drawn.
    * @param {import("../coordinate.js").Coordinate} [opt_coordinate] Coordinate associated with the event.
+   * @param {TraceTarget} [opt_traceTarget] Source-side trace target snapshot. When provided
+   * (typically on `traceend`), populates the `traceSource*` and `trace*Index` fields below.
    */
-  constructor(type, feature, opt_coordinate) {
+  constructor(type, feature, opt_coordinate, opt_traceTarget) {
     super(type);
 
     /**
@@ -215,7 +221,196 @@ export class DrawEvent extends Event {
      * @api
      */
     this.coordinate = opt_coordinate;
+
+    /**
+     * The source feature being traced. Populated on `traceend` events when a trace target
+     * was committed (cursor moved enough during the trace). Undefined on non-trace events
+     * and on `tracestart` (since the trace target is not committed until the cursor moves).
+     * @type {Feature|undefined}
+     * @api
+     */
+    this.traceSourceFeature = opt_traceTarget
+      ? opt_traceTarget.feature
+      : undefined;
+
+    /**
+     * The smallest geometry instance corresponding to the trace target.
+     *
+     * - `LineString` features → the `LineString` itself.
+     * - `CurvePolygon` features → the specific ring (`CircularString`, `CompoundCurve`,
+     *   or `LineString`); use `traceSourceRingIndex` to know which ring.
+     * - `Polygon` features → the top-level `Polygon` (rings are not separate geometry
+     *   instances); use `traceSourceRingIndex` to know which ring.
+     * - `CompoundCurve` / `CircularString` features → the geometry itself.
+     * - `MultiLineString` / `MultiPolygon` features → the top-level multi-geometry
+     *   (sub-components are not attributed because their instances are cloned per
+     *   accessor call and would not be stable).
+     *
+     * Undefined on non-trace events and on `tracestart`.
+     * @type {import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default | undefined}
+     * @api
+     */
+    this.traceSourceGeometry = opt_traceTarget
+      ? opt_traceTarget.geometry
+      : undefined;
+
+    /**
+     * For `Polygon` and `CurvePolygon` sources, the index of the ring being traced
+     * (0 for the outer ring, 1+ for interior rings/holes). Undefined for line-shaped
+     * sources, for `MultiPolygon` (where polygon identity is not attributed), and on
+     * non-trace / `tracestart` events.
+     * @type {number|undefined}
+     * @api
+     */
+    this.traceSourceRingIndex = opt_traceTarget
+      ? opt_traceTarget.ringIndex
+      : undefined;
+
+    /**
+     * Position in the source target coordinates where the trace began, expressed as a
+     * fractional index (whole part = vertex index, fractional part = position along the
+     * following segment). Index values for rings may be negative or larger than the
+     * coordinate count (they wrap). Undefined on non-trace events and on `tracestart`.
+     * @type {number|undefined}
+     * @api
+     */
+    this.traceStartIndex = opt_traceTarget
+      ? opt_traceTarget.startIndex
+      : undefined;
+
+    /**
+     * Position in the source target coordinates where the trace ended, expressed as a
+     * fractional index. For closed-ring sources, `traceEndIndex - traceStartIndex` equal
+     * to (a multiple of) the ring's coordinate count indicates a full-ring traversal.
+     * Undefined on non-trace events and on `tracestart`.
+     * @type {number|undefined}
+     * @api
+     */
+    this.traceEndIndex = opt_traceTarget ? opt_traceTarget.endIndex : undefined;
   }
+}
+
+/**
+ * @param {Array<TraceTarget>} targets Existing trace targets.
+ * @param {TraceTarget} candidate Candidate target.
+ * @return {boolean} The candidate target is already represented.
+ */
+function hasEquivalentTraceTarget(targets, candidate) {
+  const candidateStart = interpolateCoordinate(
+    candidate.coordinates,
+    candidate.startIndex,
+  );
+  for (let i = 0, ii = targets.length; i < ii; ++i) {
+    const target = targets[i];
+    if (
+      target.ring !== candidate.ring ||
+      target.coordinates.length !== candidate.coordinates.length
+    ) {
+      continue;
+    }
+    let equal = true;
+    for (let j = 0, jj = target.coordinates.length; j < jj; ++j) {
+      const a = target.coordinates[j];
+      const b = candidate.coordinates[j];
+      if (a[0] !== b[0] || a[1] !== b[1]) {
+        equal = false;
+        break;
+      }
+    }
+    if (equal) {
+      const targetStart = interpolateCoordinate(
+        target.coordinates,
+        target.startIndex,
+      );
+      if (
+        targetStart[0] !== candidateStart[0] ||
+        targetStart[1] !== candidateStart[1]
+      ) {
+        continue;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @param {TraceTarget} target Trace target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Coordinate.
+ * @return {number|null} Whole target index at the coordinate, or null.
+ */
+function getTraceVertexIndexAtCoordinate(target, coordinate) {
+  const coordinates = target.coordinates;
+  for (let i = 0, ii = coordinates.length; i < ii; ++i) {
+    const candidate = coordinates[i];
+    if (
+      candidate[0] === coordinate[0] &&
+      candidate[1] === coordinate[1] &&
+      isTraceTargetVertexIndex(target, i)
+    ) {
+      return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {TraceTarget} target Trace target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Coordinate.
+ * @return {boolean} The target starts at the coordinate.
+ */
+function traceTargetStartsAtCoordinate(target, coordinate) {
+  if (!isTraceTargetVertexIndex(target, target.startIndex)) {
+    return false;
+  }
+  const start = interpolateCoordinate(target.coordinates, target.startIndex);
+  return start[0] === coordinate[0] && start[1] === coordinate[1];
+}
+
+/**
+ * @param {TraceTarget} oldTarget Currently traced target.
+ * @param {TraceTarget} newTarget Candidate target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Current coordinate.
+ * @return {boolean} The candidate pivots at a shared target vertex.
+ */
+function isTraceVertexPivot(oldTarget, newTarget, coordinate) {
+  return (
+    getTraceVertexIndexAtCoordinate(oldTarget, coordinate) !== null &&
+    traceTargetStartsAtCoordinate(newTarget, coordinate)
+  );
+}
+
+/**
+ * @param {TraceTarget} target Trace target.
+ * @param {number} endIndex Candidate end index.
+ * @return {boolean} Candidate progress would move backward on the target.
+ */
+function isTraceBacktracking(target, endIndex) {
+  const forward = target.endIndex >= target.startIndex;
+  return forward ? endIndex < target.endIndex : endIndex > target.endIndex;
+}
+
+/**
+ * @param {TraceTarget} oldTarget Currently traced target.
+ * @param {TraceTarget} newTarget Candidate target.
+ * @return {boolean} The current trace endpoint is the candidate start vertex.
+ */
+function isStoredSharedTraceVertex(oldTarget, newTarget) {
+  if (
+    !isTraceTargetVertexIndex(oldTarget, oldTarget.endIndex) ||
+    !isTraceTargetVertexIndex(newTarget, newTarget.startIndex)
+  ) {
+    return false;
+  }
+  const oldEnd = interpolateCoordinate(
+    oldTarget.coordinates,
+    oldTarget.endIndex,
+  );
+  const newStart = interpolateCoordinate(
+    newTarget.coordinates,
+    newTarget.startIndex,
+  );
+  return squaredCoordinateDistance(oldEnd, newStart) === 0;
 }
 
 /***
@@ -281,6 +476,12 @@ class Draw extends PointerInteraction {
      * @private
      */
     this.downPx_ = null;
+
+    /**
+     * @type {import("../coordinate.js").Coordinate|null}
+     * @private
+     */
+    this.downCoordinate_ = null;
 
     /**
      * @type {ReturnType<typeof setTimeout>}
@@ -593,6 +794,12 @@ class Draw extends PointerInteraction {
     this.traceState_ = {active: false};
 
     /**
+     * @type {boolean}
+     * @private
+     */
+    this.traceBacktracking_ = options.traceBacktracking !== false;
+
+    /**
      * @type {VectorSource|null}
      * @private
      */
@@ -757,6 +964,7 @@ class Draw extends PointerInteraction {
     }
 
     this.lastDragTime_ = Date.now();
+    this.downCoordinate_ = event.coordinate.slice();
     this.downTimeout_ = setTimeout(() => {
       this.handlePointerMove_(
         new MapBrowserEvent(
@@ -778,9 +986,21 @@ class Draw extends PointerInteraction {
   deactivateTrace_() {
     if (this.traceState_.active) {
       const coord = this.traceState_.startCoord;
+      // Snapshot the committed target (if any) before clearing trace state so
+      // the traceend event can expose source-side context to listeners.
+      const committedTarget =
+        this.traceState_.targetIndex !== undefined &&
+        this.traceState_.targetIndex !== -1
+          ? this.traceState_.targets[this.traceState_.targetIndex]
+          : undefined;
       this.traceState_ = {active: false};
       this.dispatchEvent(
-        new DrawEvent(DrawEventType.TRACEEND, this.sketchFeature_, coord),
+        new DrawEvent(
+          DrawEventType.TRACEEND,
+          this.sketchFeature_,
+          coord,
+          committedTarget,
+        ),
       );
     } else {
       this.traceState_ = {active: false};
@@ -832,6 +1052,52 @@ class Draw extends PointerInteraction {
           event.coordinate.slice(),
         ),
       );
+    }
+  }
+
+  /**
+   * Add trace targets available at the current pointer coordinate.  This lets
+   * tracing continue from one feature to another when they share a point away
+   * from the original trace start.
+   * @param {import("../MapBrowserEvent.js").default} event Event.
+   * @private
+   */
+  addTraceTargetsAtCoordinate_(event) {
+    const traceState = this.traceState_;
+    if (!this.traceSource_ || !traceState.active || !traceState.targets) {
+      return;
+    }
+
+    const map = this.getMap();
+    const lowerLeft = map.getCoordinateFromPixel([
+      event.pixel[0] - this.snapTolerance_,
+      event.pixel[1] + this.snapTolerance_,
+    ]);
+    const upperRight = map.getCoordinateFromPixel([
+      event.pixel[0] + this.snapTolerance_,
+      event.pixel[1] - this.snapTolerance_,
+    ]);
+    const extent = boundingExtent([lowerLeft, upperRight]);
+    const features = this.traceSource_.getFeaturesInExtent(extent);
+    if (features.length === 0) {
+      return;
+    }
+
+    const targets = getTraceTargets(event.coordinate, features);
+    for (let i = 0, ii = targets.length; i < ii; ++i) {
+      const target = targets[i];
+      if (!isTraceTargetVertexIndex(target, target.startIndex)) {
+        continue;
+      }
+      if (traceState.targetIndex !== -1) {
+        const currentTarget = traceState.targets[traceState.targetIndex];
+        if (!isTraceVertexPivot(currentTarget, target, event.coordinate)) {
+          continue;
+        }
+      }
+      if (!hasEquivalentTraceTarget(traceState.targets, target)) {
+        traceState.targets.push(target);
+      }
     }
   }
 
@@ -951,6 +1217,8 @@ class Draw extends PointerInteraction {
       return;
     }
 
+    this.addTraceTargetsAtCoordinate_(event);
+
     if (traceState.targetIndex === -1) {
       // check if we are ready to pick a target
       const startPx = event.map.getPixelFromCoordinate(traceState.startCoord);
@@ -965,31 +1233,73 @@ class Draw extends PointerInteraction {
       this.getMap(),
       this.snapTolerance_,
     );
+    let updatedTraceTargetIndex = updatedTraceTarget.index;
+    let updatedTraceTargetEndIndex = updatedTraceTarget.endIndex;
+    if (!this.traceBacktracking_ && traceState.targetIndex !== -1) {
+      const target = traceState.targets[traceState.targetIndex];
+      if (updatedTraceTargetIndex === traceState.targetIndex) {
+        if (isTraceBacktracking(target, updatedTraceTarget.endIndex)) {
+          updatedTraceTargetEndIndex = target.endIndex;
+        }
+      }
+    }
 
-    if (traceState.targetIndex !== updatedTraceTarget.index) {
+    let blockedBacktrackingPivot = false;
+    if (traceState.targetIndex !== updatedTraceTargetIndex) {
       // target changed
       if (traceState.targetIndex !== -1) {
-        // remove points added during previous trace
         const oldTarget = traceState.targets[traceState.targetIndex];
-        this.removeTracedCoordinates_(oldTarget.startIndex, oldTarget.endIndex);
+        const newTarget = traceState.targets[updatedTraceTargetIndex];
+        if (isTraceVertexPivot(oldTarget, newTarget, event.coordinate)) {
+          const pivotIndex = getTraceVertexIndexAtCoordinate(
+            oldTarget,
+            event.coordinate,
+          );
+          if (
+            !this.traceBacktracking_ &&
+            isTraceBacktracking(oldTarget, pivotIndex)
+          ) {
+            updatedTraceTargetEndIndex = oldTarget.endIndex;
+            updatedTraceTargetIndex = traceState.targetIndex;
+            blockedBacktrackingPivot = true;
+          } else {
+            this.addOrRemoveTracedCoordinates_(oldTarget, pivotIndex);
+            oldTarget.endIndex = pivotIndex;
+          }
+        } else if (isStoredSharedTraceVertex(oldTarget, newTarget)) {
+          // The candidate was discovered at the previous shared vertex update,
+          // and the old target has already advanced to that vertex.
+        } else if (!this.traceBacktracking_) {
+          // Keep coordinates traced on the old target. This prevents a later
+          // intersection with an existing trace from snapping back and erasing
+          // the path after the intersection.
+        } else {
+          // remove points added during previous trace
+          this.removeTracedCoordinates_(
+            oldTarget.startIndex,
+            oldTarget.endIndex,
+          );
+        }
       }
       // add points for the new target
-      const newTarget = traceState.targets[updatedTraceTarget.index];
-      this.addTracedCoordinates_(
-        newTarget,
-        newTarget.startIndex,
-        updatedTraceTarget.endIndex,
-      );
+      if (!blockedBacktrackingPivot) {
+        const newTarget = traceState.targets[updatedTraceTargetIndex];
+        this.addTracedCoordinates_(
+          newTarget,
+          newTarget.startIndex,
+          updatedTraceTargetEndIndex,
+        );
+      }
     } else {
       // target stayed the same
       const target = traceState.targets[traceState.targetIndex];
-      this.addOrRemoveTracedCoordinates_(target, updatedTraceTarget.endIndex);
+      this.addOrRemoveTracedCoordinates_(target, updatedTraceTargetEndIndex);
     }
 
     // modify the state with updated info
-    traceState.targetIndex = updatedTraceTarget.index;
+    traceState.targetIndex = updatedTraceTargetIndex;
     const target = traceState.targets[traceState.targetIndex];
-    target.endIndex = updatedTraceTarget.endIndex;
+    target.endIndex = updatedTraceTargetEndIndex;
 
     // update event coordinate and pixel to match end point of final segment
     const coordinate = interpolateCoordinate(
@@ -1028,14 +1338,30 @@ class Draw extends PointerInteraction {
 
       this.handlePointerMove_(event);
       const tracing = this.traceState_.active;
-      if (!this.ignoreNextUpEvent_) {
-        this.toggleTraceState_(event);
+      let clickEvent = event;
+      if (
+        this.traceSource_ &&
+        this.downCoordinate_ &&
+        this.traceCondition_(event)
+      ) {
+        clickEvent = new MapBrowserEvent(
+          event.type,
+          event.map,
+          event.originalEvent,
+          false,
+          event.frameState,
+        );
+        clickEvent.coordinate = this.downCoordinate_.slice();
+        clickEvent.pixel = this.downPx_.slice();
+      }
+      if (!this.ignoreNextUpEvent_ || !this.traceState_.active) {
+        this.toggleTraceState_(clickEvent);
       }
 
       if (this.shouldHandle_) {
         const startingToDraw = !this.finishCoordinate_;
         if (startingToDraw) {
-          this.startDrawing_(event.coordinate);
+          this.startDrawing_(clickEvent.coordinate);
         }
         if (!startingToDraw && this.freehand_) {
           this.finishDrawing();
@@ -1043,12 +1369,12 @@ class Draw extends PointerInteraction {
           !this.freehand_ &&
           (!startingToDraw || this.mode_ === 'Point')
         ) {
-          if (this.atFinish_(event.pixel, tracing)) {
-            if (this.finishCondition_(event)) {
+          if (this.atFinish_(clickEvent.pixel, tracing)) {
+            if (this.finishCondition_(clickEvent)) {
               this.finishDrawing();
             }
           } else {
-            this.addToDrawing_(event.coordinate);
+            this.addToDrawing_(clickEvent.coordinate);
           }
         }
         pass = false;
@@ -1056,6 +1382,7 @@ class Draw extends PointerInteraction {
         this.abortDrawing();
       }
     }
+    this.downCoordinate_ = null;
     this.ignoreNextUpEvent_ = false;
 
     if (!pass && this.stopClick_) {
@@ -1266,8 +1593,18 @@ class Draw extends PointerInteraction {
       projection,
     );
     if (this.sketchPoint_) {
+      let sketchPointCoordinate;
+      if (this.mode_ === 'Point') {
+        sketchPointCoordinate = this.sketchCoords_;
+      } else if (this.mode_ === 'Polygon') {
+        const sketchCoords = /** @type {PolyCoordType} */ (this.sketchCoords_);
+        sketchPointCoordinate = sketchCoords[0][sketchCoords[0].length - 1];
+      } else {
+        const sketchCoords = /** @type {LineCoordType} */ (this.sketchCoords_);
+        sketchPointCoordinate = sketchCoords[sketchCoords.length - 1];
+      }
       const sketchPointGeom = this.sketchPoint_.getGeometry();
-      sketchPointGeom.setCoordinates(coordinate);
+      sketchPointGeom.setCoordinates(sketchPointCoordinate.slice());
     }
     if (geometry.getType() === 'Polygon' && this.mode_ !== 'Polygon') {
       this.createOrUpdateCustomSketchLine_(/** @type {Polygon} */ (geometry));

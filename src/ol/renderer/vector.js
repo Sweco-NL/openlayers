@@ -101,12 +101,18 @@ function renderCircleGeometry(builderGroup, geometry, style, feature, index) {
  * @param {import("../Feature.js").FeatureLike} feature Feature.
  * @param {number} [index] Render order index.
  */
-function renderCircularStringGeometry(builderGroup, geometry, style, feature, index) {
+function renderCircularStringGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  index,
+) {
   const strokeStyle = style.getStroke();
   if (strokeStyle) {
     const circularStringReplay = builderGroup.getBuilder(
       style.getZIndex(),
-      'CircularString'
+      'CircularString',
     );
     circularStringReplay.setFillStrokeStyle(null, strokeStyle);
     circularStringReplay.drawCircularString(geometry, feature, index);
@@ -126,12 +132,18 @@ function renderCircularStringGeometry(builderGroup, geometry, style, feature, in
  * @param {import("../Feature.js").default} feature Feature.
  * @param {number} [index] Render order index.
  */
-function renderCompoundCurveGeometry(builderGroup, geometry, style, feature, index) {
+function renderCompoundCurveGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  index,
+) {
   const strokeStyle = style.getStroke();
   if (strokeStyle) {
     const compoundCurveReplay = builderGroup.getBuilder(
       style.getZIndex(),
-      'CompoundCurve'
+      'CompoundCurve',
     );
     compoundCurveReplay.setFillStrokeStyle(null, strokeStyle);
     compoundCurveReplay.drawCompoundCurve(geometry, feature, index);
@@ -151,13 +163,19 @@ function renderCompoundCurveGeometry(builderGroup, geometry, style, feature, ind
  * @param {import("../Feature.js").default} feature Feature.
  * @param {number} [index] Render order index.
  */
-function renderCurvePolygonGeometry(builderGroup, geometry, style, feature, index) {
+function renderCurvePolygonGeometry(
+  builderGroup,
+  geometry,
+  style,
+  feature,
+  index,
+) {
   const fillStyle = style.getFill();
   const strokeStyle = style.getStroke();
   if (fillStyle || strokeStyle) {
     const polygonReplay = builderGroup.getBuilder(
       style.getZIndex(),
-      'CurvePolygon'
+      'CurvePolygon',
     );
     polygonReplay.setFillStrokeStyle(fillStyle, strokeStyle);
     polygonReplay.drawCurvePolygon(geometry, feature, index);

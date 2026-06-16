@@ -194,7 +194,7 @@ class CanvasTextBuilder extends CanvasBuilder {
       textState.placement === 'line' &&
       (geometryType == 'LineString' ||
         geometryType == 'MultiLineString' ||
-        geometryType == 'Polygon' || 
+        geometryType == 'Polygon' ||
         geometryType == 'MultiPolygon')
     ) {
       if (!intersects(this.maxExtent, geometry.getExtent())) {
@@ -288,17 +288,17 @@ class CanvasTextBuilder extends CanvasBuilder {
             ).getCenter();
           break;
         case 'CircularString':
-            flatCoordinates =
-              /** @type {import("../../geom/CircularString.js").default} */ (
+          flatCoordinates =
+            /** @type {import("../../geom/CircularString.js").default} */ (
               geometry
             ).getFlatMidpoint();
-            break;
+          break;
         case 'CompoundCurve':
-            flatCoordinates =
-              /** @type {import("../../geom/CompoundCurve.js").default} */ (
-                geometry
-              ).getFlatMidpoint();
-              break;
+          flatCoordinates =
+            /** @type {import("../../geom/CompoundCurve.js").default} */ (
+              geometry
+            ).getFlatMidpoint();
+          break;
         case 'MultiLineString':
           flatCoordinates =
             /** @type {import("../../geom/MultiLineString.js").default} */ (

@@ -51,7 +51,11 @@ export function containsAngle(
   clockwise,
   middleAngle,
   testAngle,
+  tolerance,
 ) {
+  if (tolerance === undefined) {
+    tolerance = 1e-7;
+  }
   const TWO_PI = 2 * Math.PI;
   const a = ((testAngle % TWO_PI) + TWO_PI) % TWO_PI;
 
@@ -65,7 +69,7 @@ export function containsAngle(
   }
 
   const startToAngle = angleDistance(start, a);
-  return startToAngle <= sweep + 1e-7;
+  return startToAngle <= sweep + tolerance;
 }
 
 /**
@@ -222,7 +226,7 @@ export function splitArcAtAngle(bx, by, mx, my, ex, ey, cx, cy, angle) {
   const TWO_PI = 2 * Math.PI;
 
   // Normalize the split angle to [0, 2π)
-  let splitAngle = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
+  const splitAngle = ((angle % TWO_PI) + TWO_PI) % TWO_PI;
 
   // Check if split coincides with start or end
   const dStart = Math.abs(angleDistance(splitAngle, angles.startAngle));
@@ -280,10 +284,14 @@ export function getArcBoundingCoords(bx, by, mx, my, ex, ey, cx, cy) {
 
   // Four axis-aligned extremes
   const extremes = [
-    cx, cy + radius, // top (90°)
-    cx + radius, cy, // right (0°)
-    cx, cy - radius, // bottom (270°)
-    cx - radius, cy, // left (180°)
+    cx,
+    cy + radius, // top (90°)
+    cx + radius,
+    cy, // right (0°)
+    cx,
+    cy - radius, // bottom (270°)
+    cx - radius,
+    cy, // left (180°)
   ];
 
   if (fullCircle) {

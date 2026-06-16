@@ -99,10 +99,8 @@ export function getSegmentsCrossingPoint(
         continue;
       }
 
-      const t =
-        ((ax - cx) * (cy - dy) - (ay - cy) * (cx - dx)) / denom;
-      const u =
-        ((ax - cx) * (ay - by) - (ay - cy) * (ax - bx)) / denom;
+      const t = ((ax - cx) * (cy - dy) - (ay - cy) * (cx - dx)) / denom;
+      const u = ((ax - cx) * (ay - by) - (ay - cy) * (ax - bx)) / denom;
 
       // Strict bounds: exclude endpoint touches
       if (t > 0 && t < 1 && u > 0 && u < 1) {

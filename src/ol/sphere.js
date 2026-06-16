@@ -168,10 +168,9 @@ export function getLength(geometry, options) {
     }
     case 'CircularString':
     case 'CompoundCurve': {
-      const flat =
-        /** @type {import("./geom/CircularString.js").default} */ (
-          geometry
-        ).tessellate();
+      const flat = /** @type {import("./geom/CircularString.js").default} */ (
+        geometry
+      ).tessellate();
       length = getLengthInternal(flatToCoordinates(flat), radius);
       break;
     }

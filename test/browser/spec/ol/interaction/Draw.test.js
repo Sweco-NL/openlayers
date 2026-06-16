@@ -1173,6 +1173,328 @@ describe('ol/interaction/Draw', function () {
         ],
       ]);
     });
+
+    it('starts tracing from the down coordinate when pointerup drifts off the edge', function () {
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+        new Feature(
+          new Polygon([
+            [
+              [100, -50],
+              [150, -50],
+              [150, -100],
+              [100, -100],
+              [100, -50],
+            ],
+          ]),
+        ),
+      ]);
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      expect(draw.traceState_.active).to.be(false);
+      draw.shouldHandle_ = false;
+
+      // second click activates tracing from the edge coordinate even if the
+      // pointerup coordinate has drifted away from the edge.
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerup', 60, 60);
+      expect(draw.traceState_.active).to.be(true);
+      expect(draw.traceState_.targetIndex).to.be(-1);
+      expect(draw.traceState_.startCoord).to.eql([50, -50]);
+      expect(draw.sketchCoords_).to.eql([
+        [
+          [50, 0],
+          [50, -50],
+        ],
+      ]);
+    });
+
+    it('starts tracing from the down coordinate after drag classification', function () {
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+      ]);
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      expect(draw.traceState_.active).to.be(false);
+      draw.shouldHandle_ = false;
+
+      // second click starts on the edge, moves enough to become a drag, and
+      // releases off the edge. Trace activation still honors the snapped down
+      // coordinate.
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerdrag', 60, 60);
+      simulateEvent('pointerup', 60, 60);
+      expect(draw.traceState_.active).to.be(true);
+      expect(draw.traceState_.targetIndex).to.be(-1);
+      expect(draw.traceState_.startCoord).to.eql([50, -50]);
+    });
+
+    it('does not remove traced coordinates when traceBacktracking is false', function () {
+      map.removeInteraction(draw);
+      draw = new Draw({
+        source: source,
+        type: 'Polygon',
+        trace: true,
+        traceBacktracking: false,
+      });
+      map.addInteraction(draw);
+
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+      ]);
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      draw.shouldHandle_ = false;
+
+      // second click activates tracing (center of bottom edge)
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerup', 50, 50);
+      draw.shouldHandle_ = false;
+
+      // Move forward along the trace far enough to add a vertex.
+      simulateEvent('pointermove', 100, 100);
+      const target = draw.traceState_.targets[draw.traceState_.targetIndex];
+      const endIndex = target.endIndex;
+      const coordinates = draw.sketchCoords_[0].map((coordinate) =>
+        coordinate.slice(),
+      );
+
+      // Move back toward the trace start. With backtracking disabled, the
+      // trace target progress and sketch coordinates stay where they were.
+      simulateEvent('pointermove', 60, 50);
+      expect(target.endIndex).to.be(endIndex);
+      expect(draw.sketchCoords_[0]).to.eql(coordinates);
+
+      // Move back to a shared traced vertex where another target starts. This
+      // would normally pivot and trim the old target back to the intersection.
+      simulateEvent('pointermove', 100, 50);
+      expect(draw.traceState_.targets[draw.traceState_.targetIndex]).to.be(
+        target,
+      );
+      expect(target.endIndex).to.be(endIndex);
+      expect(draw.sketchCoords_[0]).to.eql(coordinates);
+    });
+
+    it('continues tracing onto another feature at a shared point', function () {
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+        new Feature(
+          new Polygon([
+            [
+              [100, -100],
+              [150, -100],
+              [150, -150],
+              [100, -150],
+              [100, -100],
+            ],
+          ]),
+        ),
+      ]);
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      draw.shouldHandle_ = false;
+
+      // second click activates tracing on the first feature
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerup', 50, 50);
+      draw.shouldHandle_ = false;
+
+      // trace along the first feature to the shared vertex, then pivot onto
+      // the second feature
+      simulateEvent('pointermove', 75, 10);
+      simulateEvent('pointermove', 100, 100);
+      simulateEvent('pointermove', 125, 100);
+      draw.shouldHandle_ = false;
+
+      // third click ends tracing on the second feature
+      simulateEvent('pointermove', 150, 100);
+      simulateEvent('pointerdown', 150, 100);
+      simulateEvent('pointerup', 150, 100);
+      draw.shouldHandle_ = false;
+
+      // finish on first point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+
+      const features = source.getFeatures();
+      expect(features).to.have.length(3);
+      const geometry = features[2].getGeometry();
+      expect(geometry).to.be.a(Polygon);
+
+      expect(geometry.getCoordinates()).to.eql([
+        [
+          [50, 0],
+          [50, -50],
+          [100, -50],
+          [100, -100],
+          [150, -100],
+          [50, 0],
+        ],
+      ]);
+    });
+
+    it('does not pivot onto another feature at a shared edge midpoint', function () {
+      source.addFeatures([
+        new Feature(
+          new Polygon([
+            [
+              [0, -50],
+              [100, -50],
+              [100, -100],
+              [0, -100],
+              [0, -50],
+            ],
+          ]),
+        ),
+        new Feature(
+          new Polygon([
+            [
+              [100, -50],
+              [150, -50],
+              [150, -100],
+              [100, -100],
+              [100, -50],
+            ],
+          ]),
+        ),
+      ]);
+
+      // first click adds a point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+      draw.shouldHandle_ = false;
+
+      // second click activates tracing on the first feature
+      simulateEvent('pointermove', 50, 50);
+      simulateEvent('pointerdown', 50, 50);
+      simulateEvent('pointerup', 50, 50);
+      draw.shouldHandle_ = false;
+
+      // Move over the shared edge midpoint.  This is on both features, but it
+      // is not an endpoint/vertex pivot.
+      simulateEvent('pointermove', 75, 10);
+      simulateEvent('pointermove', 100, 75);
+      simulateEvent('pointermove', 125, 75);
+      draw.shouldHandle_ = false;
+
+      // End the trace while near the right feature.  Because the only shared
+      // location visited was an edge midpoint, the trace should still be the
+      // path on the original feature, not a jump onto the second feature.
+      simulateEvent('pointermove', 150, 75);
+      simulateEvent('pointerdown', 150, 75);
+      simulateEvent('pointerup', 150, 75);
+      draw.shouldHandle_ = false;
+
+      // finish on first point
+      simulateEvent('pointermove', 50, 0);
+      simulateEvent('pointerdown', 50, 0);
+      simulateEvent('pointerup', 50, 0);
+
+      const features = source.getFeatures();
+      expect(features).to.have.length(3);
+      const geometry = features[2].getGeometry();
+      expect(geometry).to.be.a(Polygon);
+
+      expect(geometry.getCoordinates()).to.eql([
+        [
+          [50, 0],
+          [50, -50],
+          [100, -50],
+          [100, -75],
+          [50, 0],
+        ],
+      ]);
+    });
+  });
+
+  describe('sketch point with custom geometry function', function () {
+    let draw;
+
+    it('uses coordinates mutated by the geometry function', function () {
+      draw = new Draw({
+        source: source,
+        type: 'LineString',
+        geometryFunction(coordinates, geometry) {
+          coordinates[coordinates.length - 1] = [20, -20];
+          if (!geometry) {
+            geometry = new LineString(coordinates);
+          } else {
+            geometry.setCoordinates(coordinates);
+          }
+          return geometry;
+        },
+      });
+      map.addInteraction(draw);
+
+      simulateEvent('pointermove', 10, 10);
+      simulateEvent('pointerdown', 10, 10);
+      simulateEvent('pointerup', 10, 10);
+      draw.shouldHandle_ = false;
+
+      simulateEvent('pointermove', 80, 80);
+
+      expect(draw.sketchPoint_.getGeometry().getCoordinates()).to.eql([
+        20, -20,
+      ]);
+    });
   });
 
   describe('trace events', function () {

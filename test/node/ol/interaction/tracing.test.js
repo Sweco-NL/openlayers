@@ -1,0 +1,250 @@
+import Feature from '../../../../src/ol/Feature.js';
+import CircularString from '../../../../src/ol/geom/CircularString.js';
+import CompoundCurve from '../../../../src/ol/geom/CompoundCurve.js';
+import CurvePolygon from '../../../../src/ol/geom/CurvePolygon.js';
+import LineString from '../../../../src/ol/geom/LineString.js';
+import MultiLineString from '../../../../src/ol/geom/MultiLineString.js';
+import MultiPolygon from '../../../../src/ol/geom/MultiPolygon.js';
+import Polygon from '../../../../src/ol/geom/Polygon.js';
+import {
+  getTraceTargetUpdate,
+  getTraceTargets,
+  isTraceTargetVertexIndex,
+} from '../../../../src/ol/interaction/tracing.js';
+import expect from '../../expect.js';
+
+describe('ol/interaction/tracing.js', function () {
+  describe('getTraceTargetUpdate()', function () {
+    it('does not switch from an outer ring to a non-shared inner ring', function () {
+      const outer = new CircularString([
+        [-3000000, 1000000],
+        [-1500000, 2500000],
+        [0, 1000000],
+        [-1500000, -500000],
+        [-3000000, 1000000],
+      ]);
+      const inner = new CircularString([
+        [-1500000, 1600000],
+        [-1900000, 1550000],
+        [-2100000, 1200000],
+        [-2150000, 550000],
+        [-1500000, 300000],
+        [-1100000, 500000],
+        [-900000, 1000000],
+        [-1050000, 1450000],
+        [-1500000, 1600000],
+      ]);
+      const feature = new Feature(new CurvePolygon([outer, inner]));
+
+      const outerTarget = getTraceTargets([-3000000, 1000000], [feature])[0];
+      const innerTarget = getTraceTargets([-2100000, 1200000], [feature])[0];
+      outerTarget.endIndex = outerTarget.startIndex + 1;
+
+      const update = getTraceTargetUpdate(
+        [-2100000, 1200000],
+        {
+          active: true,
+          startCoord: [-3000000, 1000000],
+          targets: [outerTarget, innerTarget],
+          targetIndex: 0,
+        },
+        {
+          getPixelFromCoordinate(coordinate) {
+            return coordinate;
+          },
+        },
+        10,
+      );
+
+      expect(update.index).to.be(0);
+    });
+  });
+
+  describe('isTraceTargetVertexIndex()', function () {
+    it('does not treat CircularString midpoint controls as trace pivot vertices', function () {
+      const ring = new CircularString([
+        [0, 0],
+        [50, 50],
+        [100, 0],
+        [50, -50],
+        [0, 0],
+      ]);
+      const feature = new Feature(new CurvePolygon([ring]));
+
+      const midpointTargets = getTraceTargets([50, -50], [feature]);
+      expect(midpointTargets.length).to.be(1);
+      expect(
+        isTraceTargetVertexIndex(
+          midpointTargets[0],
+          midpointTargets[0].startIndex,
+        ),
+      ).to.be(false);
+
+      const endpointTargets = getTraceTargets([100, 0], [feature]);
+      expect(endpointTargets.length).to.be(1);
+      expect(
+        isTraceTargetVertexIndex(
+          endpointTargets[0],
+          endpointTargets[0].startIndex,
+        ),
+      ).to.be(true);
+    });
+
+    it('treats LineString vertices in CompoundCurve targets as trace pivot vertices', function () {
+      const curve = new CompoundCurve([
+        new CircularString([
+          [0, 0],
+          [50, 50],
+          [100, 0],
+        ]),
+        new LineString([
+          [100, 0],
+          [150, 0],
+          [150, 50],
+        ]),
+      ]);
+      const feature = new Feature(curve);
+
+      const targets = getTraceTargets([150, 0], [feature]);
+      expect(targets.length).to.be(1);
+      expect(isTraceTargetVertexIndex(targets[0], targets[0].startIndex)).to.be(
+        true,
+      );
+    });
+  });
+
+  describe('source attribution on trace targets', function () {
+    it('attaches feature and geometry to LineString targets', function () {
+      const line = new LineString([
+        [0, 0],
+        [10, 0],
+        [10, 10],
+      ]);
+      const feature = new Feature(line);
+      const targets = getTraceTargets([10, 0], [feature]);
+      expect(targets.length).to.be(1);
+      expect(targets[0].feature).to.be(feature);
+      expect(targets[0].geometry).to.be(line);
+      expect(targets[0].ringIndex).to.be(undefined);
+    });
+
+    it('attaches the MultiLineString itself to MultiLineString targets', function () {
+      const mls = new MultiLineString([
+        [
+          [0, 0],
+          [10, 0],
+        ],
+        [
+          [20, 0],
+          [30, 0],
+        ],
+      ]);
+      const feature = new Feature(mls);
+      const targets = getTraceTargets([10, 0], [feature]);
+      expect(targets.length).to.be(1);
+      expect(targets[0].feature).to.be(feature);
+      expect(targets[0].geometry).to.be(mls);
+      expect(targets[0].ringIndex).to.be(undefined);
+    });
+
+    it('attaches top-level Polygon geometry and ringIndex to Polygon targets', function () {
+      const poly = new Polygon([
+        [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10],
+          [0, 0],
+        ],
+        [
+          [2, 2],
+          [4, 2],
+          [4, 4],
+          [2, 4],
+          [2, 2],
+        ],
+      ]);
+      const feature = new Feature(poly);
+      const outerTargets = getTraceTargets([10, 0], [feature]);
+      expect(outerTargets.length).to.be(1);
+      expect(outerTargets[0].feature).to.be(feature);
+      expect(outerTargets[0].geometry).to.be(poly);
+      expect(outerTargets[0].ringIndex).to.be(0);
+      const innerTargets = getTraceTargets([4, 2], [feature]);
+      expect(innerTargets[0].ringIndex).to.be(1);
+    });
+
+    it('attaches the MultiPolygon itself to MultiPolygon targets', function () {
+      const mp = new MultiPolygon([
+        [
+          [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+            [0, 0],
+          ],
+        ],
+        [
+          [
+            [20, 0],
+            [30, 0],
+            [30, 10],
+            [20, 10],
+            [20, 0],
+          ],
+        ],
+      ]);
+      const feature = new Feature(mp);
+      const targets = getTraceTargets([10, 0], [feature]);
+      expect(targets.length).to.be(1);
+      expect(targets[0].geometry).to.be(mp);
+      expect(targets[0].ringIndex).to.be(undefined);
+    });
+
+    it('attaches ring geometry and ringIndex to CurvePolygon targets', function () {
+      const outer = new CircularString([
+        [0, 0],
+        [10, 10],
+        [20, 0],
+        [10, -10],
+        [0, 0],
+      ]);
+      const inner = new LineString([
+        [4, 0],
+        [8, 4],
+        [12, 0],
+        [8, -4],
+        [4, 0],
+      ]);
+      const cp = new CurvePolygon([outer, inner]);
+      const feature = new Feature(cp);
+      const outerTargets = getTraceTargets([0, 0], [feature]);
+      expect(outerTargets.length).to.be(1);
+      expect(outerTargets[0].geometry).to.be(outer);
+      expect(outerTargets[0].ringIndex).to.be(0);
+      const innerTargets = getTraceTargets([4, 0], [feature]);
+      expect(innerTargets[0].geometry).to.be(inner);
+      expect(innerTargets[0].ringIndex).to.be(1);
+    });
+
+    it('attaches the CompoundCurve itself to CompoundCurve targets', function () {
+      const curve = new CompoundCurve([
+        new CircularString([
+          [0, 0],
+          [50, 50],
+          [100, 0],
+        ]),
+        new LineString([
+          [100, 0],
+          [150, 0],
+        ]),
+      ]);
+      const feature = new Feature(curve);
+      const targets = getTraceTargets([150, 0], [feature]);
+      expect(targets.length).to.be(1);
+      expect(targets[0].geometry).to.be(curve);
+      expect(targets[0].ringIndex).to.be(undefined);
+    });
+  });
+});

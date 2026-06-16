@@ -1,10 +1,10 @@
 /**
  * @module ol/format/WKB
  */
+import Feature from '../Feature.js';
 import CircularString from '../geom/CircularString.js';
 import CompoundCurve from '../geom/CompoundCurve.js';
 import CurvePolygon from '../geom/CurvePolygon.js';
-import Feature from '../Feature.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
 import MultiLineString from '../geom/MultiLineString.js';
@@ -435,13 +435,13 @@ class WkbReader {
       case WKBGeometryType.CIRCULAR_STRING:
         return new CircularString(
           /** @type {Array<import('../coordinate.js').Coordinate>} */ (result),
-          this.layout_
+          this.layout_,
         );
 
       case WKBGeometryType.COMPOUND_CURVE:
         return new CompoundCurve(
           /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
-          this.layout_
+          this.layout_,
         );
 
       case WKBGeometryType.CURVE_POLYGON:
@@ -449,13 +449,13 @@ class WkbReader {
           /** @type {Array<import('../geom/CurvePolygon.js').CurveRing>} */ (
             result
           ),
-          this.layout_
+          this.layout_,
         );
 
       case WKBGeometryType.MULTI_CURVE:
       case WKBGeometryType.MULTI_SURFACE:
         return new GeometryCollection(
-          /** @type {Array<import('../geom/Geometry.js').default>} */ (result)
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
         );
 
       default:
