@@ -803,7 +803,7 @@ class Draw extends PointerInteraction {
     this.traceBacktracking_ = options.traceBacktracking !== false;
 
     /**
-     * @type {VectorSource|null}
+     * @type {VectorSource | import("./TraceSource.js").default | null}
      * @private
      */
     this.traceSource_ = options.traceSource || options.source || null;
@@ -1044,7 +1044,9 @@ class Draw extends PointerInteraction {
       event.pixel[1] - this.snapTolerance_,
     ]);
     const extent = boundingExtent([lowerLeft, upperRight]);
-    const features = this.traceSource_.getFeaturesInExtent(extent);
+    const features = /** @type {VectorSource} */ (
+      this.traceSource_
+    ).getFeaturesInExtent(extent);
     if (features.length === 0) {
       return;
     }
@@ -1090,7 +1092,9 @@ class Draw extends PointerInteraction {
       event.pixel[1] - this.snapTolerance_,
     ]);
     const extent = boundingExtent([lowerLeft, upperRight]);
-    const features = this.traceSource_.getFeaturesInExtent(extent);
+    const features = /** @type {VectorSource} */ (
+      this.traceSource_
+    ).getFeaturesInExtent(extent);
     if (features.length === 0) {
       return;
     }
