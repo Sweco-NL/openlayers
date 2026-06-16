@@ -2,6 +2,9 @@
  * @module ol/interaction/TraceSource
  */
 import Collection from '../Collection.js';
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
 import LineString from '../geom/LineString.js';
 import Polygon from '../geom/Polygon.js';
 import {coordinatesEqualXY} from './tracing.js';
@@ -143,6 +146,22 @@ class TraceSource {
       }
       return;
     }
+    if (geometry instanceof CircularString) {
+      this.addCircularString_(geometry, feature, undefined);
+      return;
+    }
+    if (geometry instanceof CompoundCurve) {
+      this.addCompoundCurve_(geometry, feature, undefined);
+      return;
+    }
+    if (geometry instanceof CurvePolygon) {
+      const rings = geometry.getRingsArray();
+      const max = Math.min(this.exteriorOnly_ ? 1 : rings.length, rings.length);
+      for (let i = 0; i < max; ++i) {
+        this.addCurvePolygonRing_(rings[i], feature, i);
+      }
+      return;
+    }
     // Other geometry types added in later tasks.
   }
 
@@ -171,6 +190,85 @@ class TraceSource {
         feature: feature,
         ringIndex: ringIndex,
       });
+    }
+  }
+
+  /**
+   * Dispatch a single CurvePolygon ring (which can be a CircularString, CompoundCurve,
+   * or plain LineString) to the appropriate edge collector.
+   * @private
+   * @param {import("../geom/Geometry.js").default} ring The ring.
+   * @param {import("../Feature.js").default} feature Owning feature.
+   * @param {number} ringIndex Ring index (0 = exterior).
+   */
+  addCurvePolygonRing_(ring, feature, ringIndex) {
+    if (ring instanceof CircularString) {
+      this.addCircularString_(ring, feature, ringIndex);
+      return;
+    }
+    if (ring instanceof CompoundCurve) {
+      this.addCompoundCurve_(ring, feature, ringIndex);
+      return;
+    }
+    if (ring instanceof LineString) {
+      // CurvePolygon rings may be plain LineStrings; treat as closed.
+      this.addLinearRingOrLine_(
+        ring.getCoordinates(),
+        true,
+        ring,
+        feature,
+        ringIndex,
+      );
+    }
+  }
+
+  /**
+   * Walk a CircularString and emit one edge per arc triplet (start, mid, end).
+   * @private
+   * @param {import("../geom/CircularString.js").default} circular The CircularString.
+   * @param {import("../Feature.js").default} feature Owning feature.
+   * @param {number|undefined} ringIndex Ring index within a CurvePolygon parent, or undefined.
+   */
+  addCircularString_(circular, feature, ringIndex) {
+    const coords = circular.getCoordinates();
+    // CircularString coords come in (start, mid, end, mid, end, ...).
+    // Each arc consumes 3 coords; consecutive arcs share their start/end.
+    for (let i = 0; i + 2 < coords.length; i += 2) {
+      const start = this.findOrAddVertex_(coords[i]);
+      const end = this.findOrAddVertex_(coords[i + 2]);
+      this.edges_.push({
+        kind: 'CircularString',
+        subGeometry: circular,
+        segmentIndex: undefined,
+        startVertex: start,
+        endVertex: end,
+        feature: feature,
+        ringIndex: ringIndex,
+      });
+    }
+  }
+
+  /**
+   * Walk a CompoundCurve and emit edges for each sub geometry.
+   * @private
+   * @param {import("../geom/CompoundCurve.js").default} compound The CompoundCurve.
+   * @param {import("../Feature.js").default} feature Owning feature.
+   * @param {number|undefined} ringIndex Ring index within a CurvePolygon parent, or undefined.
+   */
+  addCompoundCurve_(compound, feature, ringIndex) {
+    const subs = compound.getGeometriesArray();
+    for (const sub of subs) {
+      if (sub instanceof CircularString) {
+        this.addCircularString_(sub, feature, ringIndex);
+      } else if (sub instanceof LineString) {
+        this.addLinearRingOrLine_(
+          sub.getCoordinates(),
+          false,
+          sub,
+          feature,
+          ringIndex,
+        );
+      }
     }
   }
 

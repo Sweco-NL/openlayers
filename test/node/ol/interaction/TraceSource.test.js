@@ -1,5 +1,8 @@
 import Collection from '../../../../src/ol/Collection.js';
 import Feature from '../../../../src/ol/Feature.js';
+import CircularString from '../../../../src/ol/geom/CircularString.js';
+import CompoundCurve from '../../../../src/ol/geom/CompoundCurve.js';
+import CurvePolygon from '../../../../src/ol/geom/CurvePolygon.js';
 import LineString from '../../../../src/ol/geom/LineString.js';
 import Polygon from '../../../../src/ol/geom/Polygon.js';
 import TraceSource from '../../../../src/ol/interaction/TraceSource.js';
@@ -252,6 +255,105 @@ describe('ol/interaction/TraceSource.js', function () {
       expect(edges[0].endVertex.coordinate).to.eql([1, 1]);
       expect(edges[1].startVertex.coordinate).to.eql([1, 1]);
       expect(edges[0].endVertex).to.be(edges[1].startVertex);
+    });
+  });
+
+  describe('graph building (curves)', function () {
+    it('creates one edge per arc triplet on a CircularString feature', function () {
+      // 5 coordinates = 2 arc triplets (coords [0..2] and [2..4]).
+      const f = new Feature(
+        new CircularString([
+          [0, 0],
+          [1, 1],
+          [2, 0],
+          [3, -1],
+          [4, 0],
+        ]),
+      );
+      const ts = new TraceSource({features: [f]});
+      const arcEdges = ts.getEdges().filter((e) => e.kind === 'CircularString');
+      expect(arcEdges).to.have.length(2);
+      expect(arcEdges[0].subGeometry).to.be(f.getGeometry());
+      expect(arcEdges[0].segmentIndex).to.be(undefined);
+      expect(arcEdges[0].startVertex.coordinate).to.eql([0, 0]);
+      expect(arcEdges[0].endVertex.coordinate).to.eql([2, 0]);
+    });
+
+    it('creates one edge per sub on a CompoundCurve feature', function () {
+      const compound = new CompoundCurve([
+        new CircularString([
+          [0, 0],
+          [1, 1],
+          [2, 0],
+        ]),
+        new LineString([
+          [2, 0],
+          [3, 0],
+        ]),
+      ]);
+      const f = new Feature(compound);
+      const ts = new TraceSource({features: [f]});
+      const edges = ts.getEdges();
+      expect(edges).to.have.length(2);
+      expect(edges[0].kind).to.be('CircularString');
+      expect(edges[1].kind).to.be('LineString');
+      expect(edges[0].endVertex).to.be(edges[1].startVertex);
+    });
+
+    it('walks each ring of a CurvePolygon', function () {
+      const outer = new CircularString([
+        [0, 0],
+        [10, 10],
+        [20, 0],
+        [10, -10],
+        [0, 0],
+      ]);
+      const f = new Feature(new CurvePolygon([outer]));
+      const ts = new TraceSource({features: [f]});
+      const arcEdges = ts.getEdges().filter((e) => e.kind === 'CircularString');
+      expect(arcEdges).to.have.length(2);
+    });
+
+    it('excludes CurvePolygon interior rings by default', function () {
+      const outer = new CircularString([
+        [0, 0],
+        [10, 10],
+        [20, 0],
+        [10, -10],
+        [0, 0],
+      ]);
+      const inner = new CircularString([
+        [5, 0],
+        [8, 3],
+        [11, 0],
+        [8, -3],
+        [5, 0],
+      ]);
+      const f = new Feature(new CurvePolygon([outer, inner]));
+      const ts = new TraceSource({features: [f]});
+      const arcEdges = ts.getEdges().filter((e) => e.kind === 'CircularString');
+      expect(arcEdges).to.have.length(2); // only the 2 outer arc triplets
+    });
+
+    it('includes CurvePolygon interior rings when exteriorOnly is false', function () {
+      const outer = new CircularString([
+        [0, 0],
+        [10, 10],
+        [20, 0],
+        [10, -10],
+        [0, 0],
+      ]);
+      const inner = new CircularString([
+        [5, 0],
+        [8, 3],
+        [11, 0],
+        [8, -3],
+        [5, 0],
+      ]);
+      const f = new Feature(new CurvePolygon([outer, inner]));
+      const ts = new TraceSource({features: [f], exteriorOnly: false});
+      const arcEdges = ts.getEdges().filter((e) => e.kind === 'CircularString');
+      expect(arcEdges).to.have.length(4); // 2 outer + 2 inner
     });
   });
 });
