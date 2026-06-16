@@ -100,6 +100,7 @@ function setTopoStatus(valid, reason) {
 let draw = null;
 let drawing = false;
 let currentSegType = 'arc';
+let postTraceAutoLine = false;
 let segmentBreaks = [{index: 0, type: 'arc'}];
 let wasTracing = false;
 let traceActive = false;
@@ -114,11 +115,22 @@ let activeTraceEntry = null;
 let suppressTraceUntilEnd = false;
 let pendingFullRingClose = false;
 let userClickedDuringTrace = false;
+/**
+ * The user's actual click coordinate captured at `checkCrossingCondition`
+ * (i.e. `event.coordinate` from `handleDownEvent`'s condition check) — used
+ * to recover the trace-exit index when OL's `updateTrace_` snaps the cursor
+ * to an interpolated tessellation coord that differs from the click coord.
+ * Without this, `coordinates.length - 2` at trace-end can point at the
+ * snapped interpolated cursor instead of the user's intended click vertex,
+ * making the post-trace slice include a stray tessellation sample.
+ * @type {Array<number>|null}
+ */
+let userClickedExitCoord = null;
 let maxTracedCount = 0;
 let snapFeature = null;
 let startCoord = null;
 let lastSketchCoordinates = [];
-/** @type {Array<{entryCoord: Array<number>, exitCoord: Array<number>|null, ring: object, sourceFeature: import('../src/ol/Feature.js').default|null, entryBreakIndex: number, traceStartIdx: number, traceEndIdx: number, traceMidpoint: Array<number>|null, chordFallback: boolean}>} */
+/** @type {Array<{entryCoord: Array<number>, exitCoord: Array<number>|null, ring: object, sourceFeature: import('../src/ol/Feature.js').default|null, entryBreakIndex: number, traceStartIdx: number, traceEndIdx: number, traceMidpoint: Array<number>|null, chordFallback: boolean, forceLineTrace?: boolean}>} */
 let tracedArcs = [];
 const debugEvents = [];
 
@@ -150,6 +162,32 @@ function recordDebugEvent(type, data = {}) {
   if (debugEvents.length > 300) {
     debugEvents.splice(0, debugEvents.length - 300);
   }
+}
+
+// ── Diagnostic: trap every write to currentSegType ──────────
+// Read-only instrumentation. Each setSegType() call records the
+// transition (from→to), the call-site tag, and the surrounding flag
+// state at the moment of write. Dumped via window.__dump.segTypeWrites.
+// Remove after the post-trace-auto-line regression is root-caused.
+const segTypeWrites = [];
+function setSegType(to, where) {
+  segTypeWrites.push({
+    n: debugEvents.length,
+    from: currentSegType,
+    to,
+    where,
+    postTraceAutoLine,
+    wasTracing,
+    traceActive,
+    drawing,
+    suppressTraceUntilEnd,
+    pendingFullRingClose,
+    userClickedDuringTrace,
+  });
+  if (segTypeWrites.length > 300) {
+    segTypeWrites.splice(0, segTypeWrites.length - 300);
+  }
+  currentSegType = to;
 }
 
 // ── Modify diagnostics ───────────────────────────────────────
@@ -404,6 +442,84 @@ function findSketchSubGeomNear(coords, ends, point) {
   return out.length >= 2 ? out : null;
 }
 
+/**
+ * @param {Array<number>} point Coordinate to test.
+ * @param {number} ax First endpoint x.
+ * @param {number} ay First endpoint y.
+ * @param {number} bx Second endpoint x.
+ * @param {number} by Second endpoint y.
+ * @return {boolean} Whether the point is within crossing tolerance of an endpoint.
+ */
+function isNearSegmentEndpoint(point, ax, ay, bx, by) {
+  const dax = point[0] - ax;
+  const day = point[1] - ay;
+  const dbx = point[0] - bx;
+  const dby = point[1] - by;
+  return (
+    dax * dax + day * day <= CROSSING_EPSILON_SQ ||
+    dbx * dbx + dby * dby <= CROSSING_EPSILON_SQ
+  );
+}
+
+/**
+ * Find the first crossing that is not a near-endpoint touch. Draw/tracing
+ * tessellation can place a shared vertex a few ULPs inside a segment, which
+ * passes strict 0<t<1 checks and causes false "edges cross" warnings while
+ * hugging existing boundaries.
+ * @param {Array<number>} flatCoordinates1 First flat coordinates.
+ * @param {number} offset1 First offset.
+ * @param {number} end1 First end.
+ * @param {Array<number>} flatCoordinates2 Second flat coordinates.
+ * @param {number} offset2 Second offset.
+ * @param {number} end2 Second end.
+ * @param {number} stride Coordinate stride.
+ * @return {Array<number>|undefined} Proper crossing point, if any.
+ */
+function getInteriorSegmentsCrossingPoint(
+  flatCoordinates1,
+  offset1,
+  end1,
+  flatCoordinates2,
+  offset2,
+  end2,
+  stride,
+) {
+  for (let i = offset1 + stride; i < end1; i += stride) {
+    const ax = flatCoordinates1[i - stride];
+    const ay = flatCoordinates1[i - stride + 1];
+    const bx = flatCoordinates1[i];
+    const by = flatCoordinates1[i + 1];
+
+    for (let j = offset2 + stride; j < end2; j += stride) {
+      const cx = flatCoordinates2[j - stride];
+      const cy = flatCoordinates2[j - stride + 1];
+      const dx = flatCoordinates2[j];
+      const dy = flatCoordinates2[j + 1];
+
+      const denom = (ax - bx) * (cy - dy) - (ay - by) * (cx - dx);
+      if (denom === 0) {
+        continue;
+      }
+
+      const t = ((ax - cx) * (cy - dy) - (ay - cy) * (cx - dx)) / denom;
+      const u = ((ax - cx) * (ay - by) - (ay - cy) * (ax - bx)) / denom;
+      if (t <= 0 || t >= 1 || u <= 0 || u >= 1) {
+        continue;
+      }
+
+      const point = [ax + t * (bx - ax), ay + t * (by - ay)];
+      if (
+        isNearSegmentEndpoint(point, ax, ay, bx, by) ||
+        isNearSegmentEndpoint(point, cx, cy, dx, dy)
+      ) {
+        continue;
+      }
+      return point;
+    }
+  }
+  return undefined;
+}
+
 function checkOverlapWithExisting(
   sketchCoords,
   sketchEnd,
@@ -440,7 +556,7 @@ function checkOverlapWithExisting(
     if (!existing) {
       continue;
     }
-    const crossing = getSegmentsCrossingPoint(
+    const crossing = getInteriorSegmentsCrossingPoint(
       sketchCoords,
       0,
       sketchEnd,
@@ -691,6 +807,67 @@ function sketchStyle(feature) {
 
 const source = new VectorSource();
 
+// Hard-prevent cross-feature trace hops EXCEPT at shared vertices.
+// OL's Draw interaction calls `traceSource.getFeaturesInExtent(extent)`
+// on every pointer move while a trace is active (see
+// `addTraceTargetsAtCoordinate_` in Draw.js) and adds any feature found
+// under the cursor as a new trace target. That's what enables it to
+// silently switch from the entry feature to a neighbour whose outline
+// passes near the cursor. We wrap the source's extent-query so that
+// during an active trace we return:
+//   - only the entry feature when the cursor is on its boundary at a
+//     non-shared point (no hop possible), OR
+//   - the entry feature plus any other feature that shares a control
+//     point with the entry feature within the queried extent (hop
+//     allowed at shared nodes).
+const __sourceGetFeaturesInExtent = source.getFeaturesInExtent.bind(source);
+source.getFeaturesInExtent = function (extent, projection) {
+  const all = __sourceGetFeaturesInExtent(extent, projection);
+  if (!traceActive || !activeTraceEntry || !activeTraceEntry.feature) {
+    return all;
+  }
+  const entryFeature = activeTraceEntry.feature;
+  if (!all.includes(entryFeature)) {
+    return [];
+  }
+  // Find entry-feature control points that lie inside the queried extent.
+  const entryGeom = entryFeature.getGeometry();
+  if (!entryGeom) {
+    return [entryFeature];
+  }
+  const inExtent = (c) =>
+    c[0] >= extent[0] &&
+    c[0] <= extent[2] &&
+    c[1] >= extent[1] &&
+    c[1] <= extent[3];
+  const entryCps = getControlPoints(entryGeom, {skipArcMidpoints: true})
+    .filter((p) => inExtent(p.coord))
+    .map((p) => p.coord);
+  if (entryCps.length === 0) {
+    return [entryFeature];
+  }
+  // Allow other features through only if they share a control point
+  // (exact coord match) with the entry feature within this extent.
+  const allowed = [entryFeature];
+  for (const f of all) {
+    if (f === entryFeature || f.get('_snapPoint')) {
+      continue;
+    }
+    const g = f.getGeometry();
+    if (!g) {
+      continue;
+    }
+    const cps = getControlPoints(g, {skipArcMidpoints: true});
+    const shares = cps.some((p) =>
+      entryCps.some((e) => p.coord[0] === e[0] && p.coord[1] === e[1]),
+    );
+    if (shares) {
+      allowed.push(f);
+    }
+  }
+  return allowed;
+};
+
 const preFeatureA = new Feature({
   geometry: new CurvePolygon([
     new CircularString([
@@ -767,6 +944,9 @@ const map = new Map({
   target: 'map',
   view: new View({center: [1000000, 1000000], zoom: 3}),
 });
+
+// Expose map for puppeteer/devtools inspection scripts.
+/** @type {any} */ (window).__map = map;
 
 // ── Interactions ─────────────────────────────────────────────
 
@@ -1165,7 +1345,8 @@ function committedInSegment(totalCoords) {
 
 function resetState() {
   segmentBreaks = [{index: 0, type: 'arc'}];
-  currentSegType = 'arc';
+  setSegType('arc', 'resetState');
+  postTraceAutoLine = false;
   drawing = false;
   wasTracing = false;
   traceActive = false;
@@ -1174,6 +1355,7 @@ function resetState() {
   suppressTraceUntilEnd = false;
   pendingFullRingClose = false;
   userClickedDuringTrace = false;
+  userClickedExitCoord = null;
   maxTracedCount = 0;
   tracedArcs = [];
   startCoord = null;
@@ -1270,6 +1452,55 @@ function getSourceControlPointsAt(coord) {
     }
   }
   return matches;
+}
+
+/**
+ * Pick the source ring/segment for a trace start at a shared control point.
+ * Several rings can touch at the same coordinate; source order alone is not
+ * meaningful there. Use the outgoing trace hint and the requested segment
+ * type as tie-breakers.
+ * @param {Array<number>} coord Trace entry coordinate.
+ * @param {Array<number>|undefined} hintCoord Coordinate in the outgoing trace direction.
+ * @param {string} preferredType Preferred segment type ('arc' or 'line').
+ * @return {{found: {ring: import('../src/ol/geom/Geometry.js').default, feature: import('../src/ol/Feature.js').default}|null, segmentInfo: {type: string, geometry: import('../src/ol/geom/Geometry.js').default|null}}}
+ *   Chosen ring and segment info.
+ */
+function resolveTraceStartSource(coord, hintCoord, preferredType) {
+  const matches = getSourceControlPointsAt(coord);
+  let candidates = matches.map((match) => {
+    const found = {ring: match.ring, feature: match.feature};
+    const segmentInfo = getSourceSegmentInfo(found, coord, hintCoord);
+    let hintDist = Infinity;
+    if (hintCoord && segmentInfo.geometry) {
+      const closest = [0, 0];
+      hintDist = segmentInfo.geometry.closestPointXY(
+        hintCoord[0],
+        hintCoord[1],
+        closest,
+        Infinity,
+      );
+    }
+    return {found, segmentInfo, hintDist};
+  });
+
+  if (candidates.length === 0) {
+    const found = findSourceRing(coord);
+    return {
+      found,
+      segmentInfo: getSourceSegmentInfo(found, coord, hintCoord),
+    };
+  }
+
+  if (hintCoord) {
+    const bestHintDist = Math.min(...candidates.map((c) => c.hintDist));
+    candidates = candidates.filter((c) => c.hintDist <= bestHintDist + 1);
+  }
+
+  const preferred = candidates.find(
+    (c) => c.segmentInfo.type === preferredType,
+  );
+  const chosen = preferred || candidates[0];
+  return {found: chosen.found, segmentInfo: chosen.segmentInfo};
 }
 
 // ── Trace helpers ────────────────────────────────────────────
@@ -1452,6 +1683,7 @@ function validateTraceExit(tracedArc, coords) {
       traceEndIdx: segment.traceEndIdx,
       traceMidpoint: null,
       chordFallback: false,
+      forceLineTrace: !!tracedArc.forceLineTrace,
       fullRing: false,
     };
     cacheMidpoint(newArc, coords);
@@ -1705,6 +1937,84 @@ function getSourceSegmentInfo(found, coord, hintCoord) {
 }
 
 /**
+ * @param {import('../src/ol/geom/Geometry.js').default} geometry Trace source geometry.
+ * @return {Array<Array<number>>} Trace target coordinates used by Draw.
+ */
+function getTraceTargetCoordinates(geometry) {
+  if (!geometry) {
+    return [];
+  }
+  if (geometry.tessellate) {
+    const flat = geometry.tessellate();
+    const coords = [];
+    for (let i = 0; i < flat.length; i += 2) {
+      coords.push([flat[i], flat[i + 1]]);
+    }
+    return coords;
+  }
+  return geometry.getCoordinates ? geometry.getCoordinates() : [];
+}
+
+/**
+ * @param {Array<Array<number>>} coords Trace target coordinates.
+ * @param {number} index Possibly wrapped/fractional trace index.
+ * @return {Array<number>|null} Interpolated coordinate.
+ */
+function interpolateTraceCoordinate(coords, index) {
+  const count = coords.length;
+  if (count === 0 || index === undefined) {
+    return null;
+  }
+  let startIndex = Math.floor(index);
+  const along = index - startIndex;
+  startIndex %= count;
+  if (startIndex < 0) {
+    startIndex += count;
+  }
+  let endIndex = startIndex + 1;
+  if (endIndex >= count) {
+    endIndex -= count;
+  }
+  const start = coords[startIndex];
+  const end = coords[endIndex];
+  return [
+    start[0] + (end[0] - start[0]) * along,
+    start[1] + (end[1] - start[1]) * along,
+  ];
+}
+
+/**
+ * Derive a coordinate just inside the traced direction from Draw's wrapped
+ * trace indices. This disambiguates CompoundCurve junctions where the entry
+ * coordinate belongs to both an arc and a line segment.
+ * @param {import('../src/ol/geom/Geometry.js').default} geometry Trace source geometry.
+ * @param {number|undefined} startIndex Trace start index.
+ * @param {number|undefined} endIndex Trace end index.
+ * @param {Array<number>} entryCoord Trace entry coordinate.
+ * @return {Array<number>|undefined} Hint coordinate along the actual trace.
+ */
+function getTraceDirectionHint(geometry, startIndex, endIndex, entryCoord) {
+  if (startIndex === undefined || endIndex === undefined) {
+    return undefined;
+  }
+  const coords = getTraceTargetCoordinates(geometry);
+  if (coords.length === 0) {
+    return undefined;
+  }
+  const direction = endIndex < startIndex ? -1 : 1;
+  for (let step = 1; step < Math.min(coords.length, 8); step++) {
+    const hint = interpolateTraceCoordinate(
+      coords,
+      startIndex + direction * step,
+    );
+    if (hint && !coordinateEquals(hint, entryCoord)) {
+      return hint;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Check whether an active trace segment can introduce curve tessellation
  * artifacts into the live self-intersection test.
  * @param {Object} tracedArc Active trace metadata.
@@ -1782,6 +2092,10 @@ function addPreviewSourceSegmentBreaks(coords, breaks) {
     };
   }
   if (!activeInfo.geometry) {
+    return result;
+  }
+
+  if (active.forceLineTrace) {
     return result;
   }
 
@@ -2283,7 +2597,7 @@ function buildFinalGeometries(coords) {
     // Determine the next break after trace
     const nextBreakIdx = ta.entryBreakIndex + 1;
 
-    if (ta.chordFallback || !ta.ring) {
+    if (ta.forceLineTrace || ta.chordFallback || !ta.ring) {
       // Source-ring extraction failed (off-feature exit, multi-feature trace,
       // or unmappable indices). Preserve the user's actual cursor path from
       // the sketch coordinates instead of collapsing it to a misleading
@@ -2442,12 +2756,30 @@ function checkCrossingCondition(event) {
   // Use wasTracing as well to cover the case where traceActive is
   // momentarily false during a cross-feature transition.
   const tracing = traceActive || wasTracing;
-  if (tracing && !isSourceControlPoint(event.coordinate)) {
-    setTopoStatus(
-      false,
-      'Must click a control point (large dot) to exit trace',
-    );
-    return false;
+  if (tracing) {
+    const cpMatches = getSourceControlPointsAt(event.coordinate);
+    if (cpMatches.length === 0) {
+      setTopoStatus(
+        false,
+        'Must click a control point (large dot) to exit trace',
+      );
+      return false;
+    }
+    // The control point must belong to the entry ring (when known).
+    // Otherwise the user could "exit" by clicking a control point of a
+    // different feature that happens to lie under the cursor — that is
+    // a cross-feature hop, which is not allowed.
+    if (
+      activeTraceEntry &&
+      activeTraceEntry.ring &&
+      !cpMatches.some((m) => m.ring === activeTraceEntry.ring)
+    ) {
+      setTopoStatus(
+        false,
+        'Must click a control point of the traced feature to exit trace',
+      );
+      return false;
+    }
   }
   // During trace: also reject clicks whose coord lies on a different ring
   // of the entry feature than the one being traced (e.g. an inner-ring
@@ -2488,6 +2820,11 @@ function checkCrossingCondition(event) {
   }
   if (tracing && wasTracing) {
     userClickedDuringTrace = true;
+    // Capture the user's actual click coord BEFORE OL's `updateTrace_`
+    // snaps `event.coordinate` to an interpolated tessellation coord.
+    // `handleTraceTransitions` uses this to find the real exit-click index
+    // in the sketch buffer.
+    userClickedExitCoord = event.coordinate.slice();
   }
 
   // During trace: detect full-ring close on interior rings (holes).
@@ -3027,11 +3364,42 @@ function handleTraceTransitions(coordinates) {
     // the correct segment type for the trace preview — tracing a
     // CircularString must render as an arc, not a straight line.
     const entryCoord = traceStartCoord || coordinates[coordinates.length - 2];
-    const found = findSourceRing(entryCoord);
+    // Guard against a stale re-entry: when our user-click branches finalize
+    // a trace mid-flight (`wasTracing = false`) before OL emits `traceend`,
+    // the next geometry-function call still sees `traceActive` true and
+    // would otherwise push a phantom tracedArc with the previous trace's
+    // start coordinate. Skip if the most recently finalized trace already
+    // started at this same vertex.
+    const lastFinalized =
+      tracedArcs.length > 0 ? tracedArcs[tracedArcs.length - 1] : null;
+    if (
+      lastFinalized &&
+      lastFinalized.exitCoord &&
+      coordinateEquals(lastFinalized.entryCoord, entryCoord)
+    ) {
+      return;
+    }
+    if (postTraceAutoLine) {
+      // Trace-end set currentSegType='line' so the V→next-click edge
+      // would render as a line. If a NEW trace starts before any free
+      // click, restore arc-mode so the source-segment-type detection
+      // works (forceLineTrace would otherwise hijack a CircularString
+      // trace into a polyline).
+      setSegType('arc', 'trace-start:postTraceAutoLine-reset');
+      postTraceAutoLine = false;
+      updateMode();
+    }
     // Hint: the cursor coord just after entry tells us which sub-geom of a
     // CompoundCurve ring the trace is heading along (corner ambiguity).
     const hintCoord = coordinates[coordinates.length - 1];
-    const segmentInfo = getSourceSegmentInfo(found, entryCoord, hintCoord);
+    const resolved = resolveTraceStartSource(
+      entryCoord,
+      hintCoord,
+      currentSegType,
+    );
+    const found = resolved.found;
+    const segmentInfo = resolved.segmentInfo;
+    activeTraceEntry = found;
     const entryIdx = coordinates.length - 2;
     // If the in-progress segment leading into the trace is too short to be
     // a real arc (< 3 points), force it to render as a polyline. A 2-point
@@ -3056,9 +3424,19 @@ function handleTraceTransitions(coordinates) {
     // preBreakIdx is unused but harmless — kept for readability of the loop.
     void preBreakIdx;
     const breakIndex = segmentBreaks.length;
+    const forceLineTrace = currentSegType === 'line';
+    // Render the trace section as a polyline through OL's tessellation
+    // samples — those samples already lie on the source feature, so a
+    // polyline through them visually hugs the source curve. Building a
+    // CircularString through tessellation samples instead would treat
+    // alternating samples as arc endpoint/midpoint pairs and produce
+    // wavy zig-zag arcs that "dance around" the source. The actual
+    // curve geometry is reconstructed at drawend from
+    // `tracedArc.sourceSegment` (preserved below), so the final feature
+    // is faithful regardless of preview type.
     segmentBreaks.push({
       index: entryIdx,
-      type: segmentInfo.type,
+      type: 'line',
     });
     wasTracing = true;
 
@@ -3072,14 +3450,28 @@ function handleTraceTransitions(coordinates) {
       traceStartIdx: coordinates.length - 2,
       traceEndIdx: -1,
       lastCheckedIdx: coordinates.length - 2,
+      forceLineTrace,
     });
   } else if (!tracing && wasTracing && userClickedDuringTrace) {
     // User clicked a control point to end the trace.
     // (Cross-feature transitions where traceActive goes briefly false
     // are ignored — only user clicks end a trace.)
     userClickedDuringTrace = false;
+    // OL's `updateTrace_` snaps `event.coordinate` to an interpolated
+    // tessellation coord that lands at `coordinates.length - 2` after
+    // `addToDrawing_(downCoordinate)` pushes the click. The pushed
+    // click sits at `length - 1` (the new cursor) but gets overwritten
+    // by the next pointer move, so we can't use that index. Instead,
+    // mutate the now-stable `length - 2` slot to the user's actual
+    // click coord so the post-trace slice (and any between-traces
+    // slice) starts at the click vertex rather than a stray
+    // tessellation sample.
     const exitIdx = coordinates.length - 2;
+    if (userClickedExitCoord && exitIdx >= 0) {
+      coordinates[exitIdx] = userClickedExitCoord.slice();
+    }
     const exitCoord = coordinates[exitIdx];
+    userClickedExitCoord = null;
     if (tracedArcs.length > 0) {
       const lastTraced = tracedArcs[tracedArcs.length - 1];
       lastTraced.exitCoord = exitCoord.slice();
@@ -3115,23 +3507,30 @@ function handleTraceTransitions(coordinates) {
         validateTraceExit(lastTraced, coordinates);
       }
     }
-    // Resume user's segment type
-    segmentBreaks.push({index: coordinates.length - 2, type: currentSegType});
+    // Trace exit: V serves as the start of the next arc. Leave
+    // `currentSegType` as 'arc' so V→click1→click2 is one arc
+    // (V=start, click1=midpoint, click2=endpoint). Push a fresh
+    // break at V with `currentSegType` so the post-trace slice
+    // inherits the user's intended segment type — the trace's own
+    // 'line' break would otherwise leak into post-trace clicks and
+    // collapse 3-click arc construction to a LineString.
+    segmentBreaks.push({index: exitIdx, type: currentSegType});
     wasTracing = false;
+    updateMode();
   } else if (tracing && wasTracing) {
     // Continuous trace — check for user click to end trace or full-ring close.
     if (userClickedDuringTrace && tracedArcs.length > 0) {
-      // User clicked a control point to exit trace while still on a boundary.
-      userClickedDuringTrace = false;
-      const exitIdx = coordinates.length - 2;
-      const exitCoord = coordinates[exitIdx];
-      const lastTraced = tracedArcs[tracedArcs.length - 1];
-      lastTraced.exitCoord = exitCoord.slice();
-      lastTraced.traceEndIdx = exitIdx;
-      cacheMidpoint(lastTraced, coordinates);
-      validateTraceExit(lastTraced, coordinates);
-      segmentBreaks.push({index: coordinates.length - 2, type: currentSegType});
-      wasTracing = false;
+      // User clicked a control point to exit trace while still on a
+      // boundary. At this call (call A inside `handlePointerMove_`'s
+      // `modifyDrawing_`), OL has snapped the cursor to an interpolated
+      // tessellation coord but has NOT yet appended the click via
+      // `addToDrawing_`. We can't fix the click index here — the click
+      // coord isn't in the buffer yet. Defer to the post-traceend branch
+      // (call B inside `addToDrawing_`) which fires after OL pushes the
+      // click, where we can mutate the now-stable `length - 2` slot to
+      // the captured click coord.
+      // Falling through preserves `wasTracing` so the post-traceend
+      // branch handles this user-click cleanly.
     } else if (pendingFullRingClose && tracedArcs.length > 0) {
       const lastTraced = tracedArcs[tracedArcs.length - 1];
       if (!lastTraced.exitCoord) {
@@ -3141,13 +3540,11 @@ function handleTraceTransitions(coordinates) {
         lastTraced.fullRing = true;
         lastTraced.chordFallback = false;
         cacheMidpoint(lastTraced, coordinates);
-        segmentBreaks.push({
-          index: coordinates.length - 2,
-          type: currentSegType,
-        });
+        // V serves as the start of the next arc; leave segType as 'arc'.
         wasTracing = false;
         suppressTraceUntilEnd = true;
         pendingFullRingClose = false;
+        updateMode();
       }
     }
   }
@@ -3169,6 +3566,7 @@ function handleDrawEnd(e) {
       traceEndIdx: arc.traceEndIdx,
       fullRing: !!arc.fullRing,
       chordFallback: !!arc.chordFallback,
+      forceLineTrace: !!arc.forceLineTrace,
       sourceSegment: arc.sourceSegment ? arc.sourceSegment.getType() : null,
       ring: arc.ring ? arc.ring.getType() : null,
     })),
@@ -3203,15 +3601,40 @@ function handleDrawEnd(e) {
   // produce duplicate vertices in the final geometry. Keep them only if
   // they represent a legitimate full-ring trace.
   if (tracedArcs.length > 0) {
-    tracedArcs = tracedArcs.filter((ta) => {
+    /** @type {Array<typeof tracedArcs[number]>} */
+    const filtered = [];
+    for (const ta of tracedArcs) {
       if (ta.fullRing) {
-        return true;
+        filtered.push(ta);
+        continue;
       }
       if (!ta.entryCoord || !ta.exitCoord) {
-        return false;
+        continue;
       }
-      return !coordinateEquals(ta.entryCoord, ta.exitCoord);
-    });
+      if (coordinateEquals(ta.entryCoord, ta.exitCoord)) {
+        continue;
+      }
+      // Zero-length on the sketch coordinate path → phantom.
+      if (
+        ta.traceStartIdx >= 0 &&
+        ta.traceEndIdx >= 0 &&
+        ta.traceStartIdx === ta.traceEndIdx
+      ) {
+        continue;
+      }
+      // Duplicate of the immediately preceding trace (same entry & exit).
+      const previous = filtered[filtered.length - 1];
+      if (
+        previous &&
+        coordinateEquals(previous.entryCoord, ta.entryCoord) &&
+        previous.exitCoord &&
+        coordinateEquals(previous.exitCoord, ta.exitCoord)
+      ) {
+        continue;
+      }
+      filtered.push(ta);
+    }
+    tracedArcs = filtered;
   }
 
   finalizeGeometry(e.feature);
@@ -3335,12 +3758,14 @@ function addDrawInteraction() {
       style: sketchStyle,
       condition: checkCrossingCondition,
       geometryFunction(coordinates, geometry) {
-        // Hard-prevent ring-jump: while OL is actively tracing a ring,
-        // clamp the live cursor coordinate to that entry ring whenever
-        // OL's trace target swap would put the cursor closer to a
-        // different ring of the same source feature. This makes the
-        // inner ring genuinely inaccessible — the cursor visually "sticks"
-        // to the entry ring as the user drags toward the other ring.
+        // Hard-prevent ring-jump within the entry feature: while OL is
+        // actively tracing a ring, clamp the live cursor coordinate to
+        // that entry ring whenever any OTHER ring of the same feature
+        // would be closer (e.g. an inner hole vs. the outer ring).
+        // Cross-feature hop prevention is handled separately by the
+        // `source.getFeaturesInExtent` wrap, which restricts OL's trace
+        // targets to the entry feature except at shared control points
+        // (where switching to another feature is intentionally allowed).
         if (
           traceActive &&
           activeTraceEntry &&
@@ -3349,10 +3774,11 @@ function addDrawInteraction() {
           coordinates.length >= 2
         ) {
           const entryRing = activeTraceEntry.ring;
-          const geom_ = activeTraceEntry.feature.getGeometry();
+          const entryFeature = activeTraceEntry.feature;
+          const entryGeom = entryFeature.getGeometry();
           const otherRings =
-            geom_ && geom_.getRingsArray
-              ? geom_.getRingsArray().filter((r) => r !== entryRing)
+            entryGeom && entryGeom.getRingsArray
+              ? entryGeom.getRingsArray().filter((r) => r !== entryRing)
               : [];
           if (otherRings.length > 0) {
             const closestOn = (ring, c) => {
@@ -3458,51 +3884,21 @@ function addDrawInteraction() {
         // Track tracing state transitions
         if (isNewPoint && drawing) {
           handleTraceTransitions(coordinates);
-          // If the just-committed point landed exactly on a source control
-          // point AND OL's trace did NOT engage AND the in-progress segment
-          // is a < 3-point arc, force 'line'. This covers the case where
-          // the user clicks a control point intending to start a trace,
-          // but OL's trace didn't engage (e.g. no prior pointermove over
-          // the boundary). With arc mode still active and only 2 committed
-          // coords, the next floating cursor would otherwise turn the
-          // control point into an arc midpoint.
-          //
-          // CRITICAL: skip when traceActive — handleTraceTransitions has
-          // already pushed the trace's own segment break (type chosen from
-          // the source sub-geom) at this same index, and overriding it to
-          // 'line' would visually decouple the trace from the source edge.
-          // A real 3-point arc that ENDS on a control point is preserved
-          // (segPoints >= 3 path is untouched).
-          const justCommitted =
-            coordinates.length >= 2
-              ? coordinates[coordinates.length - 2]
-              : null;
-          if (
-            justCommitted &&
-            !traceActive &&
-            isSourceControlPoint(justCommitted)
-          ) {
-            const newPtIdx = coordinates.length - 2;
-            for (let bi = segmentBreaks.length - 1; bi >= 0; bi--) {
-              // strict `<` so we only inspect breaks that started BEFORE
-              // the just-committed point — never one placed AT it.
-              if (segmentBreaks[bi].index < newPtIdx) {
-                const segPoints = newPtIdx - segmentBreaks[bi].index + 1;
-                if (segmentBreaks[bi].type === 'arc' && segPoints < 3) {
-                  segmentBreaks[bi] = {
-                    index: segmentBreaks[bi].index,
-                    type: 'line',
-                  };
-                  // Keep mode in sync so the NEXT click also stays line
-                  // until the user explicitly toggles back.
-                  currentSegType = 'line';
-                  updateMode();
-                }
-                break;
-              }
-            }
-          }
         }
+
+        // Diagnostic: expose live sketch state for puppeteer probes.
+        // Captured AFTER handleTraceTransitions so the freshly-pushed
+        // segment breaks (e.g. trace-end / first-post-trace-click) are
+        // visible. Removed after the post-trace regression is closed.
+        /** @type {*} */ (window).__liveSketch = {
+          coords: coordinates.map((c) => c.slice()),
+          segmentBreaks: segmentBreaks.slice(),
+          currentSegType,
+          drawing,
+          traceActive,
+          wasTracing,
+          postTraceAutoLine,
+        };
 
         // Auto-close: when a new point snaps to start, finish the ring
         if (
@@ -3576,7 +3972,7 @@ function addDrawInteraction() {
 
   draw.on('drawstart', (e) => {
     drawing = true;
-    currentSegType = 'arc';
+    setSegType('arc', 'drawstart');
     segmentBreaks = [{index: 0, type: 'arc'}];
     tracedArcs = [];
     updateMode();
@@ -3601,7 +3997,10 @@ function addDrawInteraction() {
     }
     traceActive = true;
     traceStartCoord = e.coordinate ? e.coordinate.slice() : null;
-    activeTraceEntry = traceStartCoord ? findSourceRing(traceStartCoord) : null;
+    activeTraceEntry = traceStartCoord
+      ? resolveTraceStartSource(traceStartCoord, undefined, currentSegType)
+          .found
+      : null;
     maxTracedCount = 0;
     recordDebugEvent('tracestart', {
       coordinate: roundCoord(traceStartCoord),
@@ -3628,13 +4027,12 @@ function addDrawInteraction() {
       const lastTraced = tracedArcs[tracedArcs.length - 1];
       const sourceFeature = findFeatureForRing(e.traceSourceGeometry);
       if (sourceFeature) {
-        const sourceCoords = e.traceSourceGeometry.getCoordinates
-          ? e.traceSourceGeometry.getCoordinates()
-          : [];
-        const hintCoord =
-          e.traceEndIndex !== undefined && e.traceEndIndex < sourceCoords.length
-            ? sourceCoords[e.traceEndIndex]
-            : undefined;
+        const hintCoord = getTraceDirectionHint(
+          e.traceSourceGeometry,
+          e.traceStartIndex,
+          e.traceEndIndex,
+          lastTraced.entryCoord,
+        );
         lastTraced.ring = e.traceSourceGeometry;
         lastTraced.sourceFeature = sourceFeature;
         lastTraced.sourceSegment = getSourceSegmentInfo(
@@ -3735,7 +4133,7 @@ document.getElementById('undo').addEventListener('click', () => {
       const last = segmentBreaks[segmentBreaks.length - 1];
       if (coords.length - 1 <= last.index) {
         segmentBreaks.pop();
-        currentSegType = segmentBreaks[segmentBreaks.length - 1].type;
+        setSegType(segmentBreaks[segmentBreaks.length - 1].type, 'undo');
         updateMode();
       }
     }
@@ -3775,7 +4173,8 @@ document.addEventListener('keydown', (e) => {
     status('Arc needs odd point count (3, 5, …). Add one more point.');
     return;
   }
-  currentSegType = currentSegType === 'arc' ? 'line' : 'arc';
+  setSegType(currentSegType === 'arc' ? 'line' : 'arc', 'T-toggle');
+  postTraceAutoLine = false;
   segmentBreaks.push({index: coords.length - 2, type: currentSegType});
   updateMode();
   status(
@@ -3931,6 +4330,170 @@ document.addEventListener('keydown', (e) => {
     };
   }
 
+  /**
+   * @param {Array<number>} point Point coordinate.
+   * @param {Array<number>} coord Coordinate to compare.
+   * @return {number} Squared distance.
+   */
+  function distanceSq(point, coord) {
+    const dx = point[0] - coord[0];
+    const dy = point[1] - coord[1];
+    return dx * dx + dy * dy;
+  }
+
+  /**
+   * @param {Array<number>} flat Flat coordinates.
+   * @param {number} start Segment start offset.
+   * @return {Array<Array<number>>} Segment endpoints.
+   */
+  function flatSegment(flat, start) {
+    return [
+      [flat[start], flat[start + 1]],
+      [flat[start + 2], flat[start + 3]],
+    ];
+  }
+
+  /**
+   * @param {Array<number>} point Point coordinate.
+   * @param {Array<Array<number>>} segment Segment endpoints.
+   * @return {Object} Endpoint proximity descriptor.
+   */
+  function endpointInfo(point, segment) {
+    const firstDistSq = distanceSq(point, segment[0]);
+    const secondDistSq = distanceSq(point, segment[1]);
+    return {
+      firstDistSq: Math.round(firstDistSq * 1000) / 1000,
+      secondDistSq: Math.round(secondDistSq * 1000) / 1000,
+      nearFirst: firstDistSq <= CROSSING_EPSILON_SQ,
+      nearSecond: secondDistSq <= CROSSING_EPSILON_SQ,
+      nearAny:
+        firstDistSq <= CROSSING_EPSILON_SQ ||
+        secondDistSq <= CROSSING_EPSILON_SQ,
+    };
+  }
+
+  /**
+   * @param {Array<number>} point Point coordinate.
+   * @param {Array<number>} arc Arc tuple [bx, by, mx, my, ex, ey].
+   * @return {Object} Arc endpoint proximity descriptor.
+   */
+  function arcEndpointInfo(point, arc) {
+    return endpointInfo(point, [
+      [arc[0], arc[1]],
+      [arc[4], arc[5]],
+    ]);
+  }
+
+  /**
+   * @param {Array<number>} a First arc tuple [bx, by, mx, my, ex, ey].
+   * @param {Array<number>} b Second arc tuple [bx, by, mx, my, ex, ey].
+   * @return {boolean} Whether the arcs share an endpoint coordinate.
+   */
+  function arcsShareEndpoint(a, b) {
+    const a0 = [a[0], a[1]];
+    const a1 = [a[4], a[5]];
+    const b0 = [b[0], b[1]];
+    const b1 = [b[4], b[5]];
+    return (
+      coordinateEquals(a0, b0) ||
+      coordinateEquals(a0, b1) ||
+      coordinateEquals(a1, b0) ||
+      coordinateEquals(a1, b1)
+    );
+  }
+
+  /**
+   * @param {Array<number>} a First flat coordinates.
+   * @param {number} aEnd First exclusive end offset.
+   * @param {Array<number>} b Second flat coordinates.
+   * @param {number} bEnd Second exclusive end offset.
+   * @return {Array<Object>} Segment-level crossing witnesses.
+   */
+  function segmentCrossingWitnesses(a, aEnd, b, bEnd) {
+    const witnesses = [];
+    for (let ai = 0; ai <= aEnd - 4; ai += 2) {
+      const aSeg = flatSegment(a, ai);
+      for (let bi = 0; bi <= bEnd - 4; bi += 2) {
+        const crossing = getSegmentsCrossingPoint(
+          a,
+          ai,
+          ai + 4,
+          b,
+          bi,
+          bi + 4,
+          2,
+        );
+        if (!crossing) {
+          continue;
+        }
+        const bSeg = flatSegment(b, bi);
+        const aEndpoint = endpointInfo(crossing, aSeg);
+        const bEndpoint = endpointInfo(crossing, bSeg);
+        witnesses.push({
+          point: round(crossing),
+          aSegmentIndex: ai / 2,
+          bSegmentIndex: bi / 2,
+          aSegment: round(aSeg),
+          bSegment: round(bSeg),
+          aEndpoint,
+          bEndpoint,
+          endpointTouch: aEndpoint.nearAny || bEndpoint.nearAny,
+          sharedEndpoint:
+            (aEndpoint.nearAny && bEndpoint.nearAny) ||
+            coordinateEquals(aSeg[0], bSeg[0]) ||
+            coordinateEquals(aSeg[0], bSeg[1]) ||
+            coordinateEquals(aSeg[1], bSeg[0]) ||
+            coordinateEquals(aSeg[1], bSeg[1]),
+        });
+        if (witnesses.length >= 12) {
+          return witnesses;
+        }
+      }
+    }
+    return witnesses;
+  }
+
+  /**
+   * @param {Array<Array<number>>} arcs First curve segments.
+   * @param {Array<Array<number>>} otherArcs Second curve segments.
+   * @return {Array<Object>} Arc-level crossing witnesses.
+   */
+  function arcCrossingWitnesses(arcs, otherArcs) {
+    const witnesses = [];
+    for (let ai = 0; ai < arcs.length; ai++) {
+      for (let bi = 0; bi < otherArcs.length; bi++) {
+        const crossings = getArcArrayCrossings(
+          [arcs[ai]],
+          [otherArcs[bi]],
+          CROSSING_EPSILON_SQ,
+          true,
+          SAME_ARC_TOLERANCE_SQ,
+        );
+        for (const point of crossings) {
+          const aEndpoint = arcEndpointInfo(point, arcs[ai]);
+          const bEndpoint = arcEndpointInfo(point, otherArcs[bi]);
+          witnesses.push({
+            point: round(point),
+            aArcIndex: ai,
+            bArcIndex: bi,
+            aArc: round(arcs[ai]),
+            bArc: round(otherArcs[bi]),
+            aEndpoint,
+            bEndpoint,
+            endpointTouch: aEndpoint.nearAny || bEndpoint.nearAny,
+            sharedEndpoint:
+              (aEndpoint.nearAny && bEndpoint.nearAny) ||
+              arcsShareEndpoint(arcs[ai], otherArcs[bi]),
+          });
+          if (witnesses.length >= 12) {
+            return witnesses;
+          }
+        }
+      }
+    }
+    return witnesses;
+  }
+
   const validationProbe = features.map((entry, i) => {
     const feature = feats[i];
     const geometry = feature.getGeometry();
@@ -3976,10 +4539,243 @@ document.addEventListener('keydown', (e) => {
     };
   });
 
+  const topologyFocus = [];
+  for (let i = 0; i < feats.length; i++) {
+    const feature = feats[i];
+    const geometry = feature.getGeometry();
+    if (!geometry || feature.get('_snapPoint')) {
+      continue;
+    }
+    const featureData = getTessellatedFlatCoords(geometry);
+    const featureEnd = featureData
+      ? featureData.ends[featureData.ends.length - 1]
+      : 0;
+    const featureArcs =
+      geometry.getType() === 'CurvePolygon'
+        ? collectCurveSegments(geometry)
+        : [];
+    for (let j = i + 1; j < feats.length; j++) {
+      const other = feats[j];
+      const otherGeometry = other.getGeometry();
+      if (!otherGeometry || other.get('_snapPoint')) {
+        continue;
+      }
+      const otherData = getTessellatedFlatCoords(otherGeometry);
+      const otherEnd = otherData
+        ? otherData.ends[otherData.ends.length - 1]
+        : 0;
+      const segmentWitnesses =
+        featureData && otherData
+          ? segmentCrossingWitnesses(
+              featureData.coords,
+              featureEnd,
+              otherData.coords,
+              otherEnd,
+            )
+          : [];
+      const otherArcs =
+        otherGeometry.getType() === 'CurvePolygon'
+          ? collectCurveSegments(otherGeometry)
+          : [];
+      const arcWitnesses =
+        featureArcs.length && otherArcs.length
+          ? arcCrossingWitnesses(featureArcs, otherArcs)
+          : [];
+      const forward = featureData
+        ? checkOverlapWithExisting(
+            featureData.coords,
+            featureEnd,
+            [other],
+            new Set(),
+            false,
+          )
+        : null;
+      const reverse = otherData
+        ? checkOverlapWithExisting(
+            otherData.coords,
+            otherEnd,
+            [feature],
+            new Set(),
+            false,
+          )
+        : null;
+      if (
+        arcWitnesses.length === 0 &&
+        segmentWitnesses.length === 0 &&
+        !forward &&
+        !reverse
+      ) {
+        continue;
+      }
+      topologyFocus.push({
+        featureIndex: i,
+        featureId: features[i].featId,
+        otherIndex: j,
+        otherFeatureId: features[j].featId,
+        featureType: geometry.getType(),
+        otherType: otherGeometry.getType(),
+        forward: probeResult(forward),
+        reverse: probeResult(reverse),
+        arcWitnesses,
+        segmentWitnesses,
+      });
+    }
+  }
+
+  /**
+   * Build the same trace exclusion context used by live sketch validation.
+   * @return {{excluded: Set<import('../src/ol/Feature.js').default>, rings: Array<import('../src/ol/geom/Geometry.js').default>}}
+   *   Features excluded from containment checks and boundary rings being traced.
+   */
+  function buildTraceExclusionContext() {
+    const excluded = new Set(
+      tracedArcs.map((arc) => arc.sourceFeature).filter(Boolean),
+    );
+    /** @type {Array<import('../src/ol/geom/Geometry.js').default>} */
+    const rings = [];
+    for (const arc of tracedArcs) {
+      if (arc.ring && !rings.includes(arc.ring)) {
+        rings.push(arc.ring);
+      }
+    }
+    if (activeTraceEntry) {
+      excluded.add(activeTraceEntry.feature);
+      if (!rings.includes(activeTraceEntry.ring)) {
+        rings.push(activeTraceEntry.ring);
+      }
+    } else if (traceStartCoord) {
+      const activeTrace = findSourceRing(traceStartCoord);
+      if (activeTrace) {
+        excluded.add(activeTrace.feature);
+        if (!rings.includes(activeTrace.ring)) {
+          rings.push(activeTrace.ring);
+        }
+      }
+    }
+    return {excluded, rings};
+  }
+
+  let sketchTopologyFocus = null;
+  const sketchFeature = draw
+    ? draw.getOverlay().getSource().getFeatures()[0]
+    : null;
+  const sketchGeometry = sketchFeature ? sketchFeature.getGeometry() : null;
+  const sketchData = sketchGeometry
+    ? getTessellatedFlatCoords(sketchGeometry)
+    : null;
+  if (sketchGeometry && sketchData) {
+    const sketchEnd = sketchData.ends[sketchData.ends.length - 1];
+    const sketchArcs =
+      sketchGeometry.getType() === 'CurvePolygon'
+        ? collectCurveSegments(sketchGeometry)
+        : [];
+    const traceContext = buildTraceExclusionContext();
+    const sourceNeighbours = feats.filter(
+      (feature) => !feature.get('_snapPoint'),
+    );
+    const neighbours = [];
+    for (const other of sourceNeighbours) {
+      const otherGeometry = other.getGeometry();
+      if (!otherGeometry) {
+        continue;
+      }
+      const otherData = getTessellatedFlatCoords(otherGeometry);
+      const otherEnd = otherData
+        ? otherData.ends[otherData.ends.length - 1]
+        : 0;
+      const otherArcs =
+        otherGeometry.getType() === 'CurvePolygon'
+          ? collectCurveSegments(otherGeometry)
+          : [];
+      const overlap = checkOverlapWithExisting(
+        sketchData.coords,
+        sketchEnd,
+        [other],
+        traceContext.excluded,
+        typeSelect.value !== 'CurvePolygon',
+        traceContext.rings,
+      );
+      const segmentWitnesses = otherData
+        ? segmentCrossingWitnesses(
+            sketchData.coords,
+            sketchEnd,
+            otherData.coords,
+            otherEnd,
+          )
+        : [];
+      const arcWitnesses =
+        sketchArcs.length && otherArcs.length
+          ? arcCrossingWitnesses(sketchArcs, otherArcs)
+          : [];
+      if (
+        !overlap &&
+        segmentWitnesses.length === 0 &&
+        arcWitnesses.length === 0
+      ) {
+        continue;
+      }
+      const otherIndex = feats.indexOf(other);
+      neighbours.push({
+        otherIndex,
+        otherFeatureId: otherIndex >= 0 ? features[otherIndex].featId : null,
+        otherType: otherGeometry.getType(),
+        traceExcluded: traceContext.excluded.has(other),
+        overlap: probeResult(overlap),
+        arcWitnesses,
+        segmentWitnesses,
+      });
+    }
+    const selfIntersection =
+      sketchEnd >= 8
+        ? getSelfIntersectionPoint(sketchData.coords, 0, sketchEnd, 2, false)
+        : null;
+    sketchTopologyFocus = {
+      type: sketchGeometry.getType(),
+      end: sketchEnd,
+      coords: sketchGeometry.getCoordinates
+        ? round(sketchGeometry.getCoordinates())
+        : null,
+      rawSelfIntersection: round(selfIntersection),
+      traceExcludedFeatureIds: Array.from(traceContext.excluded).map(
+        (feature) => id('feat', feature),
+      ),
+      traceBoundaryRingIds: traceContext.rings.map((ring) => id('ring', ring)),
+      neighbours,
+    };
+  }
+
+  const realFeatureIndexes = feats
+    .map((feature, index) => ({feature, index}))
+    .filter(({feature}) => !feature.get('_snapPoint'))
+    .map(({index}) => index);
+  const lastRealFeatureIndex = realFeatureIndexes.length
+    ? realFeatureIndexes[realFeatureIndexes.length - 1]
+    : -1;
+
+  const topologyState = {
+    uiText: topoStatusEl.textContent,
+    statusText: statusEl.textContent,
+    isValid: validationState.isValid,
+    crossingPoints: round(validationState.crossingPoints),
+    errorSegment: round(validationState.errorSegment),
+    errorFeatureIds: Array.from(validationState.errorFeatures).map((feature) =>
+      id('feat', feature),
+    ),
+    lastRealFeatureIndex,
+    lastRealFeatureTopologyFocus: topologyFocus.filter(
+      (entry) =>
+        entry.featureIndex === lastRealFeatureIndex ||
+        entry.otherIndex === lastRealFeatureIndex,
+    ),
+  };
+
   const dump = {
     featureCount: feats.length,
     features,
     validationProbe,
+    topologyState,
+    sketchTopologyFocus,
+    topologyFocus,
     events: debugEvents.slice(),
     state: {
       drawing,
@@ -4003,9 +4799,14 @@ document.addEventListener('keydown', (e) => {
         traceEndIdx: ta.traceEndIdx,
         fullRing: /** @type {any} */ (ta).fullRing || false,
         chordFallback: ta.chordFallback,
+        forceLineTrace: !!ta.forceLineTrace,
+        sourceSegment: ta.sourceSegment ? ta.sourceSegment.getType() : null,
       })),
       segmentBreaks: segmentBreaks.slice(),
+      currentSegType,
+      postTraceAutoLine,
     },
+    segTypeWrites: segTypeWrites.slice(),
   };
 
   /** @type {any} */ (window).__dump = dump;
