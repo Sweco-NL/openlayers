@@ -1492,7 +1492,22 @@ class Draw extends PointerInteraction {
 
     // 1. Vertex snap: if cursor is within tolerance of a graph vertex, use that
     //    vertex's coordinate when resolving the active edge.
-    const vertexHit = traceSource.getNearestVertex(event.coordinate, tolerance);
+    //    Graph-walk constraint: while a trace is in progress (activeEdge is
+    //    non-null) only the active edge's two endpoints are eligible snap
+    //    targets. Otherwise the cursor would visibly hop onto vertices of
+    //    disconnected features whenever it passed within snap tolerance,
+    //    even though the active edge itself correctly stays put. When there
+    //    is no active edge yet (entry/initial state) any vertex is eligible
+    //    so the trace can start anywhere on the graph.
+    const rawHit = traceSource.getNearestVertex(event.coordinate, tolerance);
+    let vertexHit = rawHit;
+    const prevActive = traceState.activeEdge;
+    if (rawHit && prevActive) {
+      const v = rawHit.vertex;
+      if (v !== prevActive.startVertex && v !== prevActive.endVertex) {
+        vertexHit = null;
+      }
+    }
     const sample = vertexHit
       ? vertexHit.vertex.coordinate.slice()
       : event.coordinate;
