@@ -441,19 +441,42 @@ function isStoredSharedTraceVertex(oldTarget, newTarget) {
 }
 
 /**
- * Find the graph vertex shared by two `TraceSource` edges, if any.
- * @param {import("./TraceSource.js").TraceEdge} a First edge.
- * @param {import("./TraceSource.js").TraceEdge} b Second edge.
+ * Find the graph vertex shared by an in-progress trace edge `top` and a new
+ * candidate edge `b`, preferring the vertex of `top.edge` that the cursor
+ * is currently closer to. Returning the *far* shared vertex would force the
+ * walk to retract every traced point on `top.edge` before the new edge takes
+ * over -- the junction-crossing line-disappear bug.
+ *
+ * The cursor proxy is `top.endIndex` along `top.tessellation`: the cursor
+ * is on the start side when `endIndex` is closer to 0, otherwise on the end
+ * side. When only one endpoint is shared, that one is returned.
+ *
+ * @param {{edge: import("./TraceSource.js").TraceEdge, tessellation: Array<import("../coordinate.js").Coordinate>, startIndex: number, endIndex: number, pointsAdded: number}} top Current edge progress.
+ * @param {import("./TraceSource.js").TraceEdge} b Candidate new edge.
  * @return {?import("./TraceSource.js").TraceVertex} Shared vertex or null.
  */
-function findSharedTraceVertex(a, b) {
-  if (a.startVertex === b.startVertex || a.startVertex === b.endVertex) {
+function findSharedTraceVertexNear(top, b) {
+  const a = top.edge;
+  const startShared =
+    a.startVertex === b.startVertex || a.startVertex === b.endVertex;
+  const endShared =
+    a.endVertex === b.startVertex || a.endVertex === b.endVertex;
+  if (!startShared && !endShared) {
+    return null;
+  }
+  if (startShared && !endShared) {
     return a.startVertex;
   }
-  if (a.endVertex === b.startVertex || a.endVertex === b.endVertex) {
+  if (!startShared && endShared) {
     return a.endVertex;
   }
-  return null;
+  // Both endpoints of `top.edge` are shared with `b` (e.g. a closed
+  // single-segment loop, or two parallel edges between the same vertices).
+  // Prefer the side the cursor is currently closer to.
+  const lastIdx = top.tessellation.length - 1;
+  const distToStart = top.endIndex;
+  const distToEnd = lastIdx - top.endIndex;
+  return distToStart <= distToEnd ? a.startVertex : a.endVertex;
 }
 
 /***
@@ -1542,7 +1565,14 @@ class Draw extends PointerInteraction {
         // (b) ADVANCE or (c) INITIAL: complete current top, push new entry.
         let entryVertex = null;
         if (top) {
-          const shared = findSharedTraceVertex(top.edge, newEdge);
+          // Pick the shared vertex closest to the cursor's current position
+          // on `top.edge` (i.e. the side of `top.edge` we're crossing off
+          // from). Falling back to declaration order makes the walk retract
+          // all the way back to the wrong endpoint when both endpoints
+          // happen to neighbour `newEdge`, which visibly destroys the
+          // sketch right before the new edge takes over -- the
+          // junction-crossing line-disappear bug.
+          const shared = findSharedTraceVertexNear(top, newEdge);
           if (shared) {
             const sharedIndexOld =
               shared === top.edge.startVertex ? 0 : top.tessellation.length - 1;
