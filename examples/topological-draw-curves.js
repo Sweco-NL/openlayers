@@ -1008,15 +1008,19 @@ function wireTraceLifecycle(drawInteraction) {
   drawInteraction.on('tracestart', () => {
     traceActive = true;
     // The click that activated trace anchors us to a source-feature control
-    // point. If the in-progress sub didn't yet have enough points to form an
-    // arc (a real CircularString sub needs ≥ 3 points), collapse it to a
-    // line: this segment is a connector to the boundary, not a half-drawn
-    // arc. Subsequent trace events will stamp arc/line breaks based on the
-    // source feature's own edge kinds.
+    // point. At this point, that click has NOT yet been added to the sketch
+    // (it's appended after toggleTraceState_ returns), so
+    // `lastSketchCoordinates.length - 1` is the count of *previously*
+    // committed points in the current sub. A real CircularString arc needs
+    // ≥ 3 points: previous + this click. Collapse only when the arc would be
+    // shorter than that — i.e., 0 or 1 prior committed points in this sub.
     const last = segmentBreaks[segmentBreaks.length - 1];
     if (last && last.type === 'arc') {
-      const inSeg = Math.max(0, lastSketchCoordinates.length - 1 - last.index);
-      if (inSeg < 3) {
+      const committedBefore = Math.max(
+        0,
+        lastSketchCoordinates.length - 1 - last.index,
+      );
+      if (committedBefore < 2) {
         last.type = 'line';
       }
     }
