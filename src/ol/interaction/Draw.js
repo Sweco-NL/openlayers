@@ -1707,15 +1707,7 @@ class Draw extends PointerInteraction {
         // Remove forward: integers (floor(newEnd)+1) .. floor(prevEnd).
         const start = Math.floor(newEndIndex) + 1;
         const end = Math.floor(prevEndIndex);
-        let remove = end - start + 1;
-        // Defensive cap: never remove more than this edge has appended.
-        // Without this cap a math glitch (or an upstream re-entry that
-        // already cleared sketch coords) could drive the sketch length to
-        // 1, which `removeLastPoints_` treats as a signal to call
-        // `abortDrawing()` -- making the entire sketch line disappear.
-        if (remove > progress.pointsAdded) {
-          remove = progress.pointsAdded;
-        }
+        const remove = end - start + 1;
         if (remove > 0) {
           this.removeLastPoints_(remove);
           progress.pointsAdded -= remove;
@@ -1740,11 +1732,7 @@ class Draw extends PointerInteraction {
         // Remove backward: integers (ceil(newEnd)-1) down to ceil(prevEnd).
         const high = Math.ceil(newEndIndex) - 1;
         const low = Math.ceil(prevEndIndex);
-        let remove = high - low + 1;
-        // Defensive cap (see forward branch).
-        if (remove > progress.pointsAdded) {
-          remove = progress.pointsAdded;
-        }
+        const remove = high - low + 1;
         if (remove > 0) {
           this.removeLastPoints_(remove);
           progress.pointsAdded -= remove;
