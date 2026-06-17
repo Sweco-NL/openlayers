@@ -1007,6 +1007,19 @@ const traceSource = new TraceSource({
 function wireTraceLifecycle(drawInteraction) {
   drawInteraction.on('tracestart', () => {
     traceActive = true;
+    // The click that activated trace anchors us to a source-feature control
+    // point. If the in-progress sub didn't yet have enough points to form an
+    // arc (a real CircularString sub needs ≥ 3 points), collapse it to a
+    // line: this segment is a connector to the boundary, not a half-drawn
+    // arc. Subsequent trace events will stamp arc/line breaks based on the
+    // source feature's own edge kinds.
+    const last = segmentBreaks[segmentBreaks.length - 1];
+    if (last && last.type === 'arc') {
+      const inSeg = Math.max(0, lastSketchCoordinates.length - 1 - last.index);
+      if (inSeg < 3) {
+        last.type = 'line';
+      }
+    }
     status('Tracing along boundary — click a vertex to exit.');
   });
 
