@@ -1533,17 +1533,8 @@ class Draw extends PointerInteraction {
       if (newEdge && prev && prev.edge === newEdge) {
         // (a) BACKTRACK: pop top, undo its appended points.
         const popped = stack.pop();
-        // Cap removal: never let the sketch shrink to 1 coord, which would
-        // cause `removeLastPoints_` to call `abortDrawing()` and clear the
-        // entire sketch. This is defensive — if pointsAdded tracking is
-        // exact this changes nothing.
-        const sketchLen = this.getSketchCoordinatesLength_();
-        let toRemove = popped.pointsAdded;
-        if (toRemove > sketchLen - 2) {
-          toRemove = Math.max(0, sketchLen - 2);
-        }
-        if (toRemove > 0) {
-          this.removeLastPoints_(toRemove);
+        if (popped.pointsAdded > 0) {
+          this.removeLastPoints_(popped.pointsAdded);
         }
         // The new top resumes — its endIndex remains at the just-vacated
         // shared vertex's index (set when this edge was finalized below).
@@ -1675,29 +1666,6 @@ class Draw extends PointerInteraction {
   }
 
   /**
-   * Get the current sketch coordinate count for the relevant mode (used
-   * defensively by the trace walk to cap removals before they would shrink
-   * the sketch to a single coord, which triggers `abortDrawing`).
-   * @return {number} Number of coords in the active sketch ring/line, or 0
-   *     when no sketch exists.
-   * @private
-   */
-  getSketchCoordinatesLength_() {
-    if (!this.sketchFeature_ || !this.sketchCoords_) {
-      return 0;
-    }
-    const mode = this.mode_;
-    if (mode === 'LineString' || mode === 'Circle') {
-      return /** @type {LineCoordType} */ (this.sketchCoords_).length;
-    }
-    if (mode === 'Polygon') {
-      const polyCoords = /** @type {PolyCoordType} */ (this.sketchCoords_);
-      return polyCoords[0] ? polyCoords[0].length : 0;
-    }
-    return 0;
-  }
-
-  /**
    * Advance (or retract) per-edge trace progress along a tessellated polyline,
    * appending or removing intermediate sketch coordinates to match. This
    * mirrors classic-mode `addOrRemoveTracedCoordinates_` but operates on a
@@ -1748,10 +1716,6 @@ class Draw extends PointerInteraction {
         if (remove > progress.pointsAdded) {
           remove = progress.pointsAdded;
         }
-        const sketchLen = this.getSketchCoordinatesLength_();
-        if (remove > sketchLen - 2) {
-          remove = Math.max(0, sketchLen - 2);
-        }
         if (remove > 0) {
           this.removeLastPoints_(remove);
           progress.pointsAdded -= remove;
@@ -1780,10 +1744,6 @@ class Draw extends PointerInteraction {
         // Defensive cap (see forward branch).
         if (remove > progress.pointsAdded) {
           remove = progress.pointsAdded;
-        }
-        const sketchLen = this.getSketchCoordinatesLength_();
-        if (remove > sketchLen - 2) {
-          remove = Math.max(0, sketchLen - 2);
         }
         if (remove > 0) {
           this.removeLastPoints_(remove);
