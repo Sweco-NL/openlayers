@@ -1555,7 +1555,12 @@ class Draw extends PointerInteraction {
             this.pickPrimitiveTraceEntryVertex_(newEdge, sample) ||
             newEdge.startVertex;
         }
-        const tess = traceSource.tessellateEdge(newEdge, tolerance);
+        // Use the default ~5° angular step for arc tessellation (no
+        // tolerance arg). The snap tolerance is for sticky-edge resolution
+        // and vertex-hit distance, not for how smoothly the trace hugs an
+        // arc; passing it here yielded coarse 4-segment arcs that visibly
+        // deviated from the source by ~one snap radius.
+        const tess = traceSource.tessellateEdge(newEdge);
         const startIndex =
           entryVertex === newEdge.startVertex ? 0 : tess.length - 1;
         stack.push({
@@ -1602,10 +1607,10 @@ class Draw extends PointerInteraction {
       } else if (vertexHit.vertex === edge.endVertex) {
         this.advancePrimitiveTraceProgress_(top, top.tessellation.length - 1);
       } else {
+        // No tolerance arg: see comment at the tessellateEdge call above.
         const proj = traceSource.projectOnEdgeTessellation(
           edge,
           event.coordinate,
-          tolerance,
         );
         this.advancePrimitiveTraceProgress_(top, proj.fractionalIndex);
       }
@@ -1614,7 +1619,6 @@ class Draw extends PointerInteraction {
       const proj = traceSource.projectOnEdgeTessellation(
         top.edge,
         event.coordinate,
-        tolerance,
       );
       this.advancePrimitiveTraceProgress_(top, proj.fractionalIndex);
       snappedCoord = proj.coordinate;
