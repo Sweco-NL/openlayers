@@ -1005,25 +1005,15 @@ const traceSource = new TraceSource({
 // ── Draw interaction wiring ──────────────────────────────────
 
 function wireTraceLifecycle(drawInteraction) {
+  let traceStartIdx = -1;
   drawInteraction.on('tracestart', () => {
     traceActive = true;
-    // The click that activated trace anchors us to a source-feature control
-    // point. At this point, that click has NOT yet been added to the sketch
-    // (it's appended after toggleTraceState_ returns), so
-    // `lastSketchCoordinates.length - 1` is the count of *previously*
-    // committed points in the current sub. A real CircularString arc needs
-    // ≥ 3 points: previous + this click. Collapse only when the arc would be
-    // shorter than that — i.e., 0 or 1 prior committed points in this sub.
-    const last = segmentBreaks[segmentBreaks.length - 1];
-    if (last && last.type === 'arc') {
-      const committedBefore = Math.max(
-        0,
-        lastSketchCoordinates.length - 1 - last.index,
-      );
-      if (committedBefore < 2) {
-        last.type = 'line';
-      }
-    }
+    // Anchor the trace's split point at the current sketch index so the
+    // first `trace` event always seeds a new break (even when its type
+    // matches the leading break's type). This lets the pre-trace prefix
+    // render with the user's chosen segment type while the traced suffix
+    // tracks the source feature's edge kinds.
+    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 1);
     status('Tracing along boundary — click a vertex to exit.');
   });
 
@@ -1035,6 +1025,15 @@ function wireTraceLifecycle(drawInteraction) {
     const type =
       e.traceSourceSubGeometryKind === 'CircularString' ? 'arc' : 'line';
     const last = segmentBreaks[segmentBreaks.length - 1];
+    // Force a split at the trace-entry vertex even if its type matches the
+    // leading break's type. Without this, dedup against an already-arc
+    // leading break would leave the pre-trace stub (a 2-point free-draw
+    // sub) merged with the traced sequence and re-fitted as one bogus arc.
+    if (idx === traceStartIdx && (!last || last.index < idx)) {
+      segmentBreaks.push({index: idx, type});
+      traceStartIdx = -1;
+      return;
+    }
     if (last && last.type === type && last.index === idx) {
       return;
     }
@@ -1046,6 +1045,7 @@ function wireTraceLifecycle(drawInteraction) {
 
   drawInteraction.on('traceend', (e) => {
     traceActive = false;
+    traceStartIdx = -1;
     // Stamp a return-to-user-segment-type break at the exit vertex.
     const exitIdx = Math.max(0, lastSketchCoordinates.length - 1);
     const last = segmentBreaks[segmentBreaks.length - 1];
