@@ -35,6 +35,8 @@ import {coordinatesEqualXY, getPointSegmentRelationship} from './tracing.js';
  * edges this is the `CircularString` sub itself.
  * @property {number} [segmentIndex] Segment index within `subGeometry` for `LineString`-segment
  * edges. Undefined for whole-sub edges (arcs).
+ * @property {number} [arcIndex] Arc index within the owning `CircularString` for arc edges.
+ * Undefined for `LineString` edges.
  * @property {TraceVertex} startVertex Start vertex.
  * @property {TraceVertex} endVertex End vertex.
  * @property {import("../Feature.js").default} feature The owning feature.
@@ -259,6 +261,7 @@ class TraceSource {
         kind: 'CircularString',
         subGeometry: circular,
         segmentIndex: undefined,
+        arcIndex: i / 2,
         startVertex: start,
         endVertex: end,
         feature: feature,
@@ -395,14 +398,45 @@ class TraceSource {
         edge.endVertex.coordinate,
       ).squaredDistance;
     }
-    // CircularString edge: delegate to the sub geometry's closestPointXY which
-    // returns the squared distance to the closest point on the curve.
-    const closest = [0, 0];
-    return edge.subGeometry.closestPointXY(
+    // CircularString edge: project onto the specific arc identified by
+    // edge.arcIndex (NOT the whole CircularString sub-geometry which may hold
+    // many arcs).
+    const closest = this.closestPointOnEdge(edge, coordinate);
+    const dx = coordinate[0] - closest[0];
+    const dy = coordinate[1] - closest[1];
+    return dx * dx + dy * dy;
+  }
+
+  /**
+   * Closest point on a specific edge. For `LineString` edges this is the
+   * closest point on the segment between the edge's two vertices. For
+   * `CircularString` edges this is the closest point on the specific arc
+   * identified by `edge.arcIndex`.
+   *
+   * @param {TraceEdge} edge The edge.
+   * @param {import("../coordinate.js").Coordinate} coordinate The coordinate.
+   * @return {import("../coordinate.js").Coordinate} Closest point on the edge.
+   */
+  closestPointOnEdge(edge, coordinate) {
+    if (edge.kind === 'LineString') {
+      const rel = getPointSegmentRelationship(
+        coordinate[0],
+        coordinate[1],
+        edge.startVertex.coordinate,
+        edge.endVertex.coordinate,
+      );
+      const sx = edge.startVertex.coordinate[0];
+      const sy = edge.startVertex.coordinate[1];
+      const ex = edge.endVertex.coordinate[0];
+      const ey = edge.endVertex.coordinate[1];
+      return [sx + (ex - sx) * rel.along, sy + (ey - sy) * rel.along];
+    }
+    // CircularString edge: project onto the specific arc.
+    const circular = /** @type {CircularString} */ (edge.subGeometry);
+    return circular.closestPointOnArc(
+      /** @type {number} */ (edge.arcIndex),
       coordinate[0],
       coordinate[1],
-      closest,
-      Infinity,
     );
   }
 

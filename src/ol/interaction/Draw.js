@@ -1513,14 +1513,7 @@ class Draw extends PointerInteraction {
     if (vertexHit) {
       snappedCoord = vertexHit.vertex.coordinate.slice();
     } else if (newEdge) {
-      const cp = [0, 0];
-      newEdge.subGeometry.closestPointXY(
-        event.coordinate[0],
-        event.coordinate[1],
-        cp,
-        Infinity,
-      );
-      snappedCoord = cp;
+      snappedCoord = traceSource.closestPointOnEdge(newEdge, event.coordinate);
     } else {
       snappedCoord = event.coordinate.slice();
     }
