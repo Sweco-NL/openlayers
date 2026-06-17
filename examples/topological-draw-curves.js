@@ -1008,20 +1008,25 @@ function wireTraceLifecycle(drawInteraction) {
   let traceStartIdx = -1;
   drawInteraction.on('tracestart', () => {
     traceActive = true;
-    // Anchor the trace's split point at the current sketch index so the
-    // first `trace` event always seeds a new break (even when its type
-    // matches the leading break's type). This lets the pre-trace prefix
-    // render with the user's chosen segment type while the traced suffix
-    // tracks the source feature's edge kinds.
-    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 1);
+    // Anchor the trace's split point at the last *committed* sketch index
+    // (sketchCoords always has a trailing tip coord that is popped/repushed
+    // by appendCoordinates, so length-1 is unstable; length-2 is the true
+    // entry vertex). This lets the first `trace` event seed a break exactly
+    // at the trace-entry vertex even when its type matches the leading
+    // default break's type.
+    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 2);
     status('Tracing along boundary — click a vertex to exit.');
   });
 
   drawInteraction.on('trace', (e) => {
-    if (lastSketchCoordinates.length === 0) {
+    if (lastSketchCoordinates.length < 2) {
       return;
     }
-    const idx = lastSketchCoordinates.length - 1;
+    // Use length-2 (last committed coord) rather than length-1 (the
+    // about-to-be-popped tip): the next appendCoordinates from the trace
+    // walk pops the tip and shifts everything past it, which would leave
+    // a tip-anchored break pointing at the wrong post-walk coordinate.
+    const idx = lastSketchCoordinates.length - 2;
     const type =
       e.traceSourceSubGeometryKind === 'CircularString' ? 'arc' : 'line';
     const last = segmentBreaks[segmentBreaks.length - 1];
@@ -1046,8 +1051,9 @@ function wireTraceLifecycle(drawInteraction) {
   drawInteraction.on('traceend', (e) => {
     traceActive = false;
     traceStartIdx = -1;
-    // Stamp a return-to-user-segment-type break at the exit vertex.
-    const exitIdx = Math.max(0, lastSketchCoordinates.length - 1);
+    // Stamp a return-to-user-segment-type break at the exit vertex (last
+    // committed coord, not the cursor tip).
+    const exitIdx = Math.max(0, lastSketchCoordinates.length - 2);
     const last = segmentBreaks[segmentBreaks.length - 1];
     if (!last || last.index !== exitIdx || last.type !== currentSegType) {
       segmentBreaks.push({index: exitIdx, type: currentSegType});

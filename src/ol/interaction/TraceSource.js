@@ -355,7 +355,12 @@ class TraceSource {
    * Resolve the active trace edge for a cursor coordinate using sticky-closest-edge
    * semantics: if `previous` is within `tolerance` of the cursor, `previous` wins (handles
    * ties at junctions and brief pauses on the current edge); otherwise the geometrically
-   * closest edge wins.
+   * closest edge among `previous` and its neighbors wins.
+   *
+   * Graph-walk constraint: when `previous` is non-null the candidate set is restricted
+   * to `previous` itself and edges sharing a vertex (junction) with it. This guarantees
+   * that the trace can only flow across connected edges and never "hops" mid-edge to an
+   * unrelated nearby feature.
    *
    * @param {import("../coordinate.js").Coordinate} coordinate Cursor coordinate.
    * @param {number} tolerance Distance tolerance for the sticky check.
@@ -374,13 +379,27 @@ class TraceSource {
     let bestEdge = null;
     let bestDist2 = Infinity;
     for (const edge of this.edges_) {
+      if (previous && edge !== previous) {
+        // Graph-walk constraint: only consider neighbors of `previous`.
+        const sharesVertex =
+          edge.startVertex === previous.startVertex ||
+          edge.startVertex === previous.endVertex ||
+          edge.endVertex === previous.startVertex ||
+          edge.endVertex === previous.endVertex;
+        if (!sharesVertex) {
+          continue;
+        }
+      }
       const d2 = this.squaredDistanceToEdge_(coordinate, edge);
       if (d2 < bestDist2) {
         bestDist2 = d2;
         bestEdge = edge;
       }
     }
-    return bestEdge;
+    // Fallback: if no candidate was found (should be impossible when `previous`
+    // is a valid edge, since `previous` itself is always considered) keep the
+    // previous edge so the cursor stays on the graph.
+    return bestEdge || previous;
   }
 
   /**

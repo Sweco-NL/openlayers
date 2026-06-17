@@ -428,6 +428,56 @@ describe('ol/interaction/TraceSource.js', function () {
       const edge = ts.getActiveEdge([10, 5], 1, previous);
       expect(edge).to.be(edges[1]);
     });
+
+    it('getActiveEdge does not hop to a disconnected feature mid-edge', function () {
+      // Two features whose edges are geometrically close but share no vertex.
+      // The cursor sits closer to feature B's edge than to feature A's
+      // current edge, but the graph-walk constraint must keep the active
+      // edge on feature A (transitions are only allowed via shared vertices).
+      const a = new Feature(
+        new LineString([
+          [0, 0],
+          [100, 0],
+        ]),
+      );
+      const b = new Feature(
+        new LineString([
+          [0, 5],
+          [100, 5],
+        ]),
+      );
+      const ts = new TraceSource({features: [a, b]});
+      const edges = ts.getEdges();
+      const previousA = edges[0];
+      // Cursor at [50, 4] is 1 unit from edge B but 4 units from edge A.
+      // Without the graph-walk constraint it would hop to B; with it, it
+      // must stick to A (or rather, return A — the only neighbor of A is
+      // A itself since B shares no vertex).
+      const edge = ts.getActiveEdge([50, 4], 0.5, previousA);
+      expect(edge).to.be(previousA);
+    });
+
+    it('getActiveEdge allows transition to a shared-vertex neighbor', function () {
+      // Two features that meet at a shared vertex [10, 0] — graph-walk
+      // constraint must permit the transition between them.
+      const a = new Feature(
+        new LineString([
+          [0, 0],
+          [10, 0],
+        ]),
+      );
+      const b = new Feature(
+        new LineString([
+          [10, 0],
+          [10, 10],
+        ]),
+      );
+      const ts = new TraceSource({features: [a, b]});
+      const edges = ts.getEdges();
+      const previousA = edges[0];
+      const edge = ts.getActiveEdge([10, 5], 0.5, previousA);
+      expect(edge).to.be(edges[1]);
+    });
   });
 
   describe('live updates', function () {
