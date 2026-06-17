@@ -1148,6 +1148,97 @@ class CircularString extends SimpleGeometry {
   }
 
   /**
+   * Tessellate a single arc into a polyline approximation. The result includes
+   * both the arc start and end coordinates as the first and last entries; the
+   * through-point is preserved exactly when an interior tessellation step
+   * lands close to it.
+   *
+   * @param {number} arcIndex The arc index (0-based, must be `< arcCount()`).
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units.
+   *     When omitted, a default angular step of ~5° is used.
+   * @return {Array<import("../coordinate.js").Coordinate>} Polyline approximation
+   *     of the arc; always at least 2 coordinates (start, end). Empty when
+   *     `arcIndex` is out of range.
+   * @api
+   */
+  tessellateArc(arcIndex, tolerance) {
+    if (arcIndex < 0 || arcIndex >= this.arcCount()) {
+      return [];
+    }
+    const flat = this.flatCoordinates;
+    const stride = this.stride;
+    const offset = arcIndex * 2 * stride;
+    const bx = flat[offset];
+    const by = flat[offset + 1];
+    const mx = flat[offset + stride];
+    const my = flat[offset + stride + 1];
+    const ex = flat[offset + stride * 2];
+    const ey = flat[offset + stride * 2 + 1];
+
+    const center = getCircleCenter(bx, by, mx, my, ex, ey);
+    if (!center) {
+      // degenerate arc - emit straight line endpoints
+      return [
+        [bx, by],
+        [ex, ey],
+      ];
+    }
+    const cx = center[0];
+    const cy = center[1];
+    const radius = getArcRadius(cx, cy, bx, by);
+    const angles = getArcAngles(cx, cy, bx, by, mx, my, ex, ey);
+    const cw = isArcClockwise(bx, by, mx, my, ex, ey);
+    const full = isFullCircle(bx, by, ex, ey);
+    const startAngle = angles.startAngle;
+    let sweep;
+    if (full) {
+      sweep = 2 * Math.PI;
+    } else if (cw) {
+      sweep = -angleDistance(angles.endAngle, angles.startAngle);
+    } else {
+      sweep = angleDistance(angles.startAngle, angles.endAngle);
+    }
+    const absSweep = Math.abs(sweep);
+    const numSeg = computeSegmentCount(radius, absSweep, tolerance);
+    let midStep = -1;
+    if (!full) {
+      const midAngle = angles.middleAngle;
+      let midOffset = midAngle - startAngle;
+      if (cw) {
+        if (midOffset > 0) {
+          midOffset -= 2 * Math.PI;
+        }
+      } else {
+        if (midOffset < 0) {
+          midOffset += 2 * Math.PI;
+        }
+      }
+      midStep = Math.round((midOffset / sweep) * numSeg);
+      if (midStep <= 0 || midStep >= numSeg) {
+        midStep = -1;
+      }
+    }
+    const result = new Array(numSeg + 1);
+    for (let j = 0; j <= numSeg; ++j) {
+      if (j === 0) {
+        result[j] = [bx, by];
+      } else if (j === numSeg) {
+        result[j] = [ex, ey];
+      } else if (j === midStep) {
+        result[j] = [mx, my];
+      } else {
+        const frac = j / numSeg;
+        const angle = startAngle + sweep * frac;
+        result[j] = [
+          cx + radius * Math.cos(angle),
+          cy + radius * Math.sin(angle),
+        ];
+      }
+    }
+    return result;
+  }
+
+  /**
    * Returns tessellated flat coordinate data suitable for topology operations.
    * This provides the bridge between curve geometry and flat-coordinate
    * algorithms (e.g. `getSegmentsCrossingPoint`, `linearRingContainsXY`).

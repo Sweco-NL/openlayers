@@ -441,6 +441,86 @@ class TraceSource {
   }
 
   /**
+   * Polyline approximation of one edge. For `LineString` edges this is just
+   * the segment endpoints (2 coordinates). For `CircularString` edges this
+   * tessellates the specific arc identified by `edge.arcIndex` so callers
+   * can walk intermediate points (used for arc hugging during tracing).
+   *
+   * Results are cached on the edge instance keyed by tolerance so repeated
+   * calls during a trace do not re-tessellate.
+   *
+   * @param {TraceEdge} edge The edge.
+   * @param {number} [tolerance] Max chord-to-arc error in coordinate units
+   *     for arc tessellation. When omitted, a default angular step of ~5° is
+   *     used. Ignored for `LineString` edges.
+   * @return {Array<import("../coordinate.js").Coordinate>} Polyline approximation
+   *     of the edge; always at least 2 coordinates (start, end).
+   */
+  tessellateEdge(edge, tolerance) {
+    if (edge.kind === 'LineString') {
+      return [
+        edge.startVertex.coordinate.slice(),
+        edge.endVertex.coordinate.slice(),
+      ];
+    }
+    const cache =
+      /** @type {{tolerance: number|undefined, coords: Array<import("../coordinate.js").Coordinate>}|undefined} */ (
+        /** @type {*} */ (edge).tessellation_
+      );
+    if (cache && cache.tolerance === tolerance) {
+      return cache.coords;
+    }
+    const circular = /** @type {CircularString} */ (edge.subGeometry);
+    const coords = circular.tessellateArc(
+      /** @type {number} */ (edge.arcIndex),
+      tolerance,
+    );
+    /** @type {*} */ (edge).tessellation_ = {tolerance, coords};
+    return coords;
+  }
+
+  /**
+   * Project a coordinate onto the polyline approximation of one edge,
+   * returning both the projected point and a fractional index along the
+   * polyline. The fractional index is `segIndex + along` where `segIndex`
+   * is the polyline segment index (0-based) and `along` is the 0..1
+   * parameter within that segment. Use this when walking an edge's
+   * tessellation incrementally as the cursor moves.
+   *
+   * @param {TraceEdge} edge The edge.
+   * @param {import("../coordinate.js").Coordinate} coordinate The query coordinate.
+   * @param {number} [tolerance] Max chord-to-arc error for arc tessellation.
+   * @return {{coordinate: import("../coordinate.js").Coordinate, fractionalIndex: number}}
+   *     Projected coordinate and fractional polyline index.
+   */
+  projectOnEdgeTessellation(edge, coordinate, tolerance) {
+    const tess = this.tessellateEdge(edge, tolerance);
+    const x = coordinate[0];
+    const y = coordinate[1];
+    let bestSeg = 0;
+    let bestAlong = 0;
+    let bestDist2 = Infinity;
+    let bestX = tess[0][0];
+    let bestY = tess[0][1];
+    for (let i = 0, ii = tess.length - 1; i < ii; ++i) {
+      const a = tess[i];
+      const b = tess[i + 1];
+      const rel = getPointSegmentRelationship(x, y, a, b);
+      if (rel.squaredDistance < bestDist2) {
+        bestDist2 = rel.squaredDistance;
+        bestSeg = i;
+        bestAlong = rel.along;
+        bestX = a[0] + (b[0] - a[0]) * rel.along;
+        bestY = a[1] + (b[1] - a[1]) * rel.along;
+      }
+    }
+    return {
+      coordinate: [bestX, bestY],
+      fractionalIndex: bestSeg + bestAlong,
+    };
+  }
+
+  /**
    * Detach any internal listeners. The instance must not be used after dispose.
    */
   dispose() {

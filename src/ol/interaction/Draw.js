@@ -1173,8 +1173,7 @@ class Draw extends PointerInteraction {
       startCoord: hit.vertex.coordinate.slice(),
       activeEdge: null,
       entryVertex: hit.vertex,
-      lastCommittedVertex: null,
-      previousCommittedVertex: null,
+      edgeStack: [],
     };
     this.dispatchEvent(
       new DrawEvent(
@@ -1505,45 +1504,61 @@ class Draw extends PointerInteraction {
       traceState.activeEdge,
     );
 
-    // 3. Cursor hugging: project the raw cursor onto the active edge so the
-    //    in-flight sketch segment follows the boundary instead of drifting
-    //    away with the mouse. Vertex hits take precedence so we land exactly
-    //    on the vertex coordinate.
-    let snappedCoord;
-    if (vertexHit) {
-      snappedCoord = vertexHit.vertex.coordinate.slice();
-    } else if (newEdge) {
-      snappedCoord = traceSource.closestPointOnEdge(newEdge, event.coordinate);
-    } else {
-      snappedCoord = event.coordinate.slice();
-    }
-
-    // 4. Edge transition: commit (or uncommit on backtrack) the shared vertex
-    //    between the previous active edge and the new one.
+    // 3. Edge transition: maintain the trace-history stack (one entry per
+    //    edge traversed since `tracestart`). Three branches:
+    //    a) BACKTRACK — newEdge is the previous edge in the stack: pop the
+    //       top, removing its appended points from the sketch.
+    //    b) ADVANCE — newEdge is fresh: complete the current top to its
+    //       shared-vertex endpoint, then push a new entry for newEdge.
+    //    c) INITIAL — stack was empty: just push the first entry.
     if (newEdge !== traceState.activeEdge) {
-      const oldEdge = traceState.activeEdge;
-      traceState.activeEdge = newEdge;
-      if (oldEdge && newEdge) {
-        const shared = findSharedTraceVertex(oldEdge, newEdge);
-        if (shared) {
-          if (shared === traceState.previousCommittedVertex) {
-            // Cursor swept back across the previous junction: undo the last
-            // commit so the path retracts.
-            this.removeLastPoints_(1);
-            traceState.lastCommittedVertex = traceState.previousCommittedVertex;
-            traceState.previousCommittedVertex = null;
-          } else if (shared !== traceState.lastCommittedVertex) {
-            this.appendCoordinates([shared.coordinate.slice()]);
-            traceState.previousCommittedVertex = traceState.lastCommittedVertex;
-            traceState.lastCommittedVertex = shared;
+      const stack = traceState.edgeStack;
+      const top = stack.length > 0 ? stack[stack.length - 1] : null;
+      const prev = stack.length > 1 ? stack[stack.length - 2] : null;
+      if (newEdge && prev && prev.edge === newEdge) {
+        // (a) BACKTRACK: pop top, undo its appended points.
+        const popped = stack.pop();
+        if (popped.pointsAdded > 0) {
+          this.removeLastPoints_(popped.pointsAdded);
+        }
+        // The new top resumes — its endIndex remains at the just-vacated
+        // shared vertex's index (set when this edge was finalized below).
+      } else if (newEdge) {
+        // (b) ADVANCE or (c) INITIAL: complete current top, push new entry.
+        let entryVertex = null;
+        if (top) {
+          const shared = findSharedTraceVertex(top.edge, newEdge);
+          if (shared) {
+            const sharedIndexOld =
+              shared === top.edge.startVertex ? 0 : top.tessellation.length - 1;
+            this.advancePrimitiveTraceProgress_(top, sharedIndexOld);
+            entryVertex = shared;
           }
         }
+        if (!entryVertex) {
+          entryVertex =
+            this.pickPrimitiveTraceEntryVertex_(newEdge, sample) ||
+            newEdge.startVertex;
+        }
+        const tess = traceSource.tessellateEdge(newEdge, tolerance);
+        const startIndex =
+          entryVertex === newEdge.startVertex ? 0 : tess.length - 1;
+        stack.push({
+          edge: newEdge,
+          tessellation: tess,
+          startIndex: startIndex,
+          endIndex: startIndex,
+          pointsAdded: 0,
+        });
       }
+      // If newEdge is null we keep the current stack untouched (cursor wandered
+      // off the graph; sticky-closest should normally avoid this).
+      traceState.activeEdge = newEdge;
       this.dispatchEvent(
         new DrawEvent(
           DrawEventType.TRACE,
           this.sketchFeature_,
-          snappedCoord.slice(),
+          (vertexHit ? vertexHit.vertex.coordinate : event.coordinate).slice(),
           newEdge
             ? {
                 feature: newEdge.feature,
@@ -1558,6 +1573,42 @@ class Draw extends PointerInteraction {
       );
     }
 
+    // 4. Walk tessellation: project cursor onto the active (top) edge's
+    //    polyline and advance/retract the sketch to match.
+    const stack = traceState.edgeStack;
+    const top = stack.length > 0 ? stack[stack.length - 1] : null;
+    let snappedCoord;
+    if (vertexHit && top && top.edge === traceState.activeEdge) {
+      // Snap to a tessellation endpoint when the vertex is one of this
+      // edge's endpoints.
+      const edge = top.edge;
+      if (vertexHit.vertex === edge.startVertex) {
+        this.advancePrimitiveTraceProgress_(top, 0);
+      } else if (vertexHit.vertex === edge.endVertex) {
+        this.advancePrimitiveTraceProgress_(top, top.tessellation.length - 1);
+      } else {
+        const proj = traceSource.projectOnEdgeTessellation(
+          edge,
+          event.coordinate,
+          tolerance,
+        );
+        this.advancePrimitiveTraceProgress_(top, proj.fractionalIndex);
+      }
+      snappedCoord = vertexHit.vertex.coordinate.slice();
+    } else if (top) {
+      const proj = traceSource.projectOnEdgeTessellation(
+        top.edge,
+        event.coordinate,
+        tolerance,
+      );
+      this.advancePrimitiveTraceProgress_(top, proj.fractionalIndex);
+      snappedCoord = proj.coordinate;
+    } else if (vertexHit) {
+      snappedCoord = vertexHit.vertex.coordinate.slice();
+    } else {
+      snappedCoord = event.coordinate.slice();
+    }
+
     // 5. Update the event so subsequent modifyDrawing_ / sketch-point logic
     //    sees the snapped coordinate.
     event.coordinate = snappedCoord;
@@ -1568,6 +1619,108 @@ class Draw extends PointerInteraction {
         event.pixel = [Math.round(pixel[0]), Math.round(pixel[1])];
       }
     }
+  }
+
+  /**
+   * Pick the entry vertex of a TraceSource edge that is closest to a sample
+   * coordinate. Used when there is no previously active edge to share a
+   * vertex with (e.g. the very first pointer move after `tracestart`).
+   * @param {import("./TraceSource.js").TraceEdge} edge The edge.
+   * @param {import("../coordinate.js").Coordinate} sample Sample coordinate.
+   * @return {import("./TraceSource.js").TraceVertex|null} Closest endpoint.
+   * @private
+   */
+  pickPrimitiveTraceEntryVertex_(edge, sample) {
+    const entry = this.traceState_.entryVertex;
+    if (entry === edge.startVertex || entry === edge.endVertex) {
+      return entry;
+    }
+    const sx = edge.startVertex.coordinate;
+    const ex = edge.endVertex.coordinate;
+    const ds =
+      (sample[0] - sx[0]) * (sample[0] - sx[0]) +
+      (sample[1] - sx[1]) * (sample[1] - sx[1]);
+    const de =
+      (sample[0] - ex[0]) * (sample[0] - ex[0]) +
+      (sample[1] - ex[1]) * (sample[1] - ex[1]);
+    return ds <= de ? edge.startVertex : edge.endVertex;
+  }
+
+  /**
+   * Advance (or retract) per-edge trace progress along a tessellated polyline,
+   * appending or removing intermediate sketch coordinates to match. This
+   * mirrors classic-mode `addOrRemoveTracedCoordinates_` but operates on a
+   * `TraceSource` edge's polyline approximation.
+   *
+   * The integer walk uses inclusive endpoints: when the new fractional index
+   * is exactly an integer (i.e. the cursor sits exactly on a tessellation
+   * vertex), that vertex is appended. This makes the walk land cleanly on
+   * shared graph vertices during edge transitions.
+   *
+   * @param {{edge: import("./TraceSource.js").TraceEdge, tessellation: Array<import("../coordinate.js").Coordinate>, startIndex: number, endIndex: number, pointsAdded: number}} progress Progress state.
+   * @param {number} newEndIndex New fractional index along the tessellation.
+   * @private
+   */
+  advancePrimitiveTraceProgress_(progress, newEndIndex) {
+    const prevEndIndex = progress.endIndex;
+    if (newEndIndex === prevEndIndex) {
+      return;
+    }
+    // For TraceSource edges the entry is always at index 0 or N-1 (always
+    // an endpoint vertex). Direction of travel is fully determined by which
+    // endpoint is the start.
+    const goingForward = progress.startIndex === 0;
+    if (goingForward) {
+      if (newEndIndex > prevEndIndex) {
+        // Add forward: walk integers (floor(prevEnd)+1) .. floor(newEnd).
+        const start = Math.floor(prevEndIndex) + 1;
+        const end = Math.floor(newEndIndex);
+        if (end >= start) {
+          const tess = progress.tessellation;
+          const coords = [];
+          for (let i = start; i <= end; ++i) {
+            coords.push(tess[i].slice());
+          }
+          this.appendCoordinates(coords);
+          progress.pointsAdded += coords.length;
+        }
+      } else {
+        // Remove forward: integers (floor(newEnd)+1) .. floor(prevEnd).
+        const start = Math.floor(newEndIndex) + 1;
+        const end = Math.floor(prevEndIndex);
+        const remove = end - start + 1;
+        if (remove > 0) {
+          this.removeLastPoints_(remove);
+          progress.pointsAdded -= remove;
+        }
+      }
+    } else {
+      // backward: startIndex = N-1, walk from high to low.
+      if (newEndIndex < prevEndIndex) {
+        // Add backward: walk integers (ceil(prevEnd)-1) down to ceil(newEnd).
+        const high = Math.ceil(prevEndIndex) - 1;
+        const low = Math.ceil(newEndIndex);
+        if (high >= low) {
+          const tess = progress.tessellation;
+          const coords = [];
+          for (let i = high; i >= low; --i) {
+            coords.push(tess[i].slice());
+          }
+          this.appendCoordinates(coords);
+          progress.pointsAdded += coords.length;
+        }
+      } else {
+        // Remove backward: integers (ceil(newEnd)-1) down to ceil(prevEnd).
+        const high = Math.ceil(newEndIndex) - 1;
+        const low = Math.ceil(prevEndIndex);
+        const remove = high - low + 1;
+        if (remove > 0) {
+          this.removeLastPoints_(remove);
+          progress.pointsAdded -= remove;
+        }
+      }
+    }
+    progress.endIndex = newEndIndex;
   }
 
   /**
