@@ -314,6 +314,18 @@ export class DrawEvent extends Event {
           opt_traceTarget
         ).subGeometryKind
       : undefined;
+
+    /**
+     * For `CircularString` edges, the 0-based index of the arc triplet within
+     * the subGeometry being traced. Two arcs sharing the same `CircularString`
+     * sub-geometry have different `arcIndex` values. Undefined for `LineString`
+     * edges and on non-trace / `tracestart` events.
+     * @type {number|undefined}
+     * @api
+     */
+    this.traceSourceArcIndex = opt_traceTarget
+      ? /** @type {{arcIndex?: number}} */ (opt_traceTarget).arcIndex
+      : undefined;
   }
 }
 
@@ -860,6 +872,16 @@ class Draw extends PointerInteraction {
     this.traceState_ = {active: false};
 
     /**
+     * Ordered record of all TraceSource edges committed during the current draw
+     * session. Each entry corresponds to one completed trace and contains the
+     * edges that contributed coordinates to the sketch, in traversal order.
+     * Cleared when a new sketch starts. Populated by deactivateTracePrimitive_.
+     * @private
+     * @type {Array<Array<{edge: import("./TraceSource.js").TraceEdge, pointsAdded: number}>>}
+     */
+    this.committedTraceEdges_ = [];
+
+    /**
      * @type {boolean}
      * @private
      */
@@ -1213,6 +1235,15 @@ class Draw extends PointerInteraction {
    */
   deactivateTracePrimitive_(event) {
     const activeEdge = this.traceState_.activeEdge;
+    // Snapshot edges that contributed coords so getCanonicalCoordinates can
+    // replace tessellated arc points with exact source control points.
+    const edgeStack = this.traceState_.edgeStack || [];
+    const committed = edgeStack
+      .filter((entry) => entry.pointsAdded > 0)
+      .map((entry) => ({edge: entry.edge, pointsAdded: entry.pointsAdded}));
+    if (committed.length > 0) {
+      this.committedTraceEdges_.push(committed);
+    }
     this.traceState_ = {active: false};
     this.dispatchEvent(
       new DrawEvent(
@@ -1234,8 +1265,129 @@ class Draw extends PointerInteraction {
   }
 
   /**
+   * Replace tessellated arc coordinates in a sketch coordinate array with the
+   * exact control points from the traced source geometries.
+   *
+   * During tracing, arc edges are rendered as polyline tessellations (many
+   * points). At `drawend`, calling this method converts each committed arc
+   * segment back to its canonical `[start, mid, end]` triplet using the
+   * source `CircularString`'s actual control points. `LineString` edges are
+   * passed through unchanged (their `pointsAdded` coords are correct already).
+   *
+   * The method works backwards through the committed edge list so that each
+   * splice operation does not shift the offset of edges not yet processed.
+   *
+   * @param {Array<import("../coordinate.js").Coordinate>} rawCoords Raw sketch
+   *   coordinates as produced by the draw interaction (e.g. from
+   *   `lastSketchCoordinates` or `feature.getGeometry().getCoordinates()`).
+   * @return {Array<import("../coordinate.js").Coordinate>} New coordinate array
+   *   with arc tessellations replaced by exact source control points. The input
+   *   array is not mutated.
+   * @api
+   */
+  getCanonicalCoordinates(rawCoords) {
+    if (!this.isTraceSourcePrimitive_() || this.committedTraceEdges_.length === 0) {
+      return rawCoords.slice();
+    }
+    const traceSource =
+      /** @type {import("./TraceSource.js").default} */ (this.traceSource_);
+
+    // Flatten all committed trace sessions into one ordered list of
+    // {edge, pointsAdded} entries. We need each entry's absolute offset
+    // into rawCoords, so we walk forward once to build offsets, then
+    // walk backward to splice (high→low keeps offsets stable).
+    //
+    // The sketch grows as: [freehand...] [traceEdge1pts...] [freehand...]
+    // [traceEdge2pts...] ... but we only know how many points each edge
+    // contributed, not their absolute positions. We derive offsets by
+    // scanning rawCoords: for each edge we know exactly `pointsAdded` coords
+    // were appended starting at the entry vertex. The entry vertex of the
+    // first edge in a session is the last freehand/previous-edge coord;
+    // each subsequent edge's entry is the exit vertex of the previous one.
+    //
+    // Simpler and correct: flatten the edgeStack sessions and, for each arc
+    // edge, we know start = rawCoords[offset] and end = rawCoords[offset +
+    // pointsAdded] where offset advances by pointsAdded across edges.
+    //
+    // We need the absolute start offset of the first edge across all sessions.
+    // Since sessions are contiguous (trace1 immediately follows its freehand
+    // entry, trace2 follows immediately, etc.), we can compute the total
+    // tessellation points committed by all sessions and subtract from the
+    // known end of the raw coord array (minus the freehand tail, which is 0
+    // or more points after the last trace). This is fragile.
+    //
+    // Simpler approach: the entry vertex of the very first edge in each session
+    // IS in rawCoords (it was the vertex clicked to start the trace). Walk
+    // rawCoords to find it, then march forward through edges using pointsAdded.
+
+    const result = rawCoords.slice();
+    // Process all sessions in one flat reversed pass.
+    const flat = [];
+    for (const session of this.committedTraceEdges_) {
+      for (const entry of session) {
+        flat.push(entry);
+      }
+    }
+
+    // Compute absolute offsets for each edge by walking rawCoords forward.
+    // The entry vertex of the first edge in the very first session must exist
+    // in rawCoords; we find it by matching startVertex.coordinate.
+    if (flat.length === 0) {
+      return result;
+    }
+
+    // Find the start of the first committed edge in rawCoords by scanning
+    // for its startVertex coordinate.
+    const firstEdge = flat[0].edge;
+    const firstEntryCoord = firstEdge.startVertex.coordinate;
+    let offset = -1;
+    for (let i = 0; i < result.length; i++) {
+      const c = result[i];
+      if (
+        Math.abs(c[0] - firstEntryCoord[0]) < 1e-9 &&
+        Math.abs(c[1] - firstEntryCoord[1]) < 1e-9
+      ) {
+        offset = i;
+        break;
+      }
+    }
+    if (offset === -1) {
+      // Entry vertex not found — return unchanged (safety fallback).
+      return result;
+    }
+
+    // Compute the absolute [startOffset, endOffset] for each edge.
+    /** @type {Array<{edge: import("./TraceSource.js").TraceEdge, startOff: number, endOff: number}>} */
+    const resolved = [];
+    let cur = offset;
+    for (const {edge, pointsAdded} of flat) {
+      resolved.push({edge, startOff: cur, endOff: cur + pointsAdded});
+      cur += pointsAdded;
+    }
+
+    // Splice arc edges back-to-front (so earlier offsets stay valid).
+    for (let i = resolved.length - 1; i >= 0; i--) {
+      const {edge, startOff, endOff} = resolved[i];
+      if (edge.kind !== 'CircularString') {
+        continue;
+      }
+      const ctrlPts = traceSource.getEdgeControlPoints(edge);
+      // ctrlPts = [start, mid, end]. start and end are already in result at
+      // startOff and endOff respectively; only mid needs to be inserted.
+      // Replace the interior tessellation points with just the arc midpoint.
+      const interiorCount = endOff - startOff - 1;
+      if (interiorCount <= 0) {
+        continue;
+      }
+      // Splice out (interiorCount) interior points, insert the single midpoint.
+      result.splice(startOff + 1, interiorCount - 1, ctrlPts[1]);
+    }
+
+    return result;
+  }
+
+  /**
    * Add trace targets available at the current pointer coordinate.  This lets
-   * tracing continue from one feature to another when they share a point away
    * from the original trace start.
    * @param {import("../MapBrowserEvent.js").default} event Event.
    * @private
@@ -1617,6 +1769,7 @@ class Draw extends PointerInteraction {
                 startIndex: undefined,
                 endIndex: undefined,
                 subGeometryKind: newEdge.kind,
+                arcIndex: newEdge.arcIndex,
               }
             : undefined,
         ),
@@ -1823,10 +1976,62 @@ class Draw extends PointerInteraction {
             /** @type {import("./TraceSource.js").default} */ (
               this.traceSource_
             );
-          const hit = exitTraceSource.getNearestVertex(
+          let hit = exitTraceSource.getNearestVertex(
             clickEvent.coordinate,
             exitTolerance,
           );
+          // The Snap interaction may land the click on a CircularString
+          // throughpoint (the mid control-point of an arc triplet). These
+          // lie exactly on the arc geometry but are NOT graph vertices, so
+          // getNearestVertex finds nothing and the exit silently fails.
+          // If the active edge is a CircularString arc and the click
+          // coordinate falls within tolerance of the arc's throughpoint,
+          // advance trace progress to the nearer endpoint vertex and exit
+          // there so canonical arc control-point replacement stays intact.
+          if (!hit) {
+            const activeEdge = this.traceState_.activeEdge;
+            if (activeEdge && activeEdge.kind === 'CircularString') {
+              const circular =
+                /** @type {import("../geom/CircularString.js").default} */ (
+                  activeEdge.subGeometry
+                );
+              const arcCoords = circular.getCoordinates();
+              const arcIdx = /** @type {number} */ (activeEdge.arcIndex);
+              // Throughpoint is the middle coordinate of the arc triplet
+              // (index arcIdx*2+1 in the full coordinates array).
+              const mid = arcCoords[arcIdx * 2 + 1];
+              if (mid) {
+                const dmx = clickEvent.coordinate[0] - mid[0];
+                const dmy = clickEvent.coordinate[1] - mid[1];
+                if (dmx * dmx + dmy * dmy <= exitTolerance * exitTolerance) {
+                  // Click is at the throughpoint. Exit at the nearer of the
+                  // arc's two endpoint vertices (which ARE graph vertices).
+                  const sv = activeEdge.startVertex;
+                  const ev = activeEdge.endVertex;
+                  const dsx = clickEvent.coordinate[0] - sv.coordinate[0];
+                  const dsy = clickEvent.coordinate[1] - sv.coordinate[1];
+                  const dex = clickEvent.coordinate[0] - ev.coordinate[0];
+                  const dey = clickEvent.coordinate[1] - ev.coordinate[1];
+                  const nearest =
+                    dsx * dsx + dsy * dsy <= dex * dex + dey * dey
+                      ? sv
+                      : ev;
+                  const stack = this.traceState_.edgeStack;
+                  const top =
+                    stack && stack.length > 0 ? stack[stack.length - 1] : null;
+                  if (top) {
+                    const targetIndex =
+                      nearest === activeEdge.startVertex
+                        ? 0
+                        : top.tessellation.length - 1;
+                    this.advancePrimitiveTraceProgress_(top, targetIndex);
+                  }
+                  clickEvent.coordinate = nearest.coordinate.slice();
+                  hit = {vertex: nearest, squaredDistance: 0};
+                }
+              }
+            }
+          }
           if (hit) {
             this.toggleTraceState_(clickEvent);
           }
@@ -2004,6 +2209,7 @@ class Draw extends PointerInteraction {
   startDrawing_(start) {
     const projection = this.getMap().getView().getProjection();
     const stride = getStrideForLayout(this.geometryLayout_);
+    this.committedTraceEdges_ = [];
     while (start.length < stride) {
       start.push(0);
     }

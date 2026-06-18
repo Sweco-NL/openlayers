@@ -1,4 +1,5 @@
 import Feature from '../../../../../src/ol/Feature.js';
+import CircularString from '../../../../../src/ol/geom/CircularString.js';
 import LineString from '../../../../../src/ol/geom/LineString.js';
 import Draw from '../../../../../src/ol/interaction/Draw.js';
 import TraceSource from '../../../../../src/ol/interaction/TraceSource.js';
@@ -33,7 +34,7 @@ describe('ol/interaction/Draw with TraceSource', function () {
         ),
       ],
     });
-    traceSource = new TraceSource({features: source.getFeaturesCollection()});
+    traceSource = new TraceSource({features: source.getFeatures()});
     map = new Map({
       target: target,
       layers: [new VectorLayer({source: source})],
@@ -95,24 +96,27 @@ describe('ol/interaction/Draw with TraceSource', function () {
     let draw;
 
     beforeEach(function () {
-      // Two adjacent line features sharing vertex [1, 1].
+      // Two adjacent line features sharing vertex [0, 0].
+      // Features are 40-unit wide so that midpoints (20 units from nearest
+      // vertex) fall outside the default 12-pixel snap tolerance at
+      // resolution=1, making "non-vertex" clicks genuinely non-vertex.
       source.clear();
       source.addFeatures([
         new Feature(
           new LineString([
+            [-40, 0],
             [0, 0],
-            [1, 1],
           ]),
         ),
         new Feature(
           new LineString([
-            [1, 1],
-            [2, 0],
+            [0, 0],
+            [40, 0],
           ]),
         ),
       ]);
       traceSource = new TraceSource({
-        features: source.getFeaturesCollection(),
+        features: source.getFeatures(),
       });
       draw = new Draw({
         source: new VectorSource(),
@@ -126,14 +130,15 @@ describe('ol/interaction/Draw with TraceSource', function () {
     it('fires tracestart with no traceSourceSubGeometryKind at a junction', function () {
       const starts = [];
       draw.on('tracestart', (e) => starts.push(e));
-      // Click at map [0,0] to start drawing.
+      // Start drawing at [0, 30] — 30 units above the line, clear of all
+      // vertices (minimum vertex distance ≈ 30 > snap-tolerance 12).
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
+      // Click at map [0, 0] (the shared junction vertex) to enter trace mode.
       simulateEvent('pointermove', 0, 0);
       simulateEvent('pointerdown', 0, 0);
       simulateEvent('pointerup', 0, 0);
-      // Click near map [1,1] (screen y is negated) to enter trace mode.
-      simulateEvent('pointermove', 1, -1);
-      simulateEvent('pointerdown', 1, -1);
-      simulateEvent('pointerup', 1, -1);
       expect(starts).to.have.length(1);
       expect(starts[0].traceSourceSubGeometryKind).to.be(undefined);
     });
@@ -142,15 +147,16 @@ describe('ol/interaction/Draw with TraceSource', function () {
       const events = [];
       draw.on('trace', (e) => events.push(e));
 
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
       simulateEvent('pointermove', 0, 0);
       simulateEvent('pointerdown', 0, 0);
       simulateEvent('pointerup', 0, 0);
-      simulateEvent('pointermove', 1, -1);
-      simulateEvent('pointerdown', 1, -1);
-      simulateEvent('pointerup', 1, -1);
 
-      // Cursor moves toward map [2,0]; should resolve to the second segment.
-      simulateEvent('pointermove', 1.5, -0.5);
+      // Cursor moves along the second segment; stays within 6px of the
+      // last downPx_ so shouldHandle_ remains true and updateTrace_ runs.
+      simulateEvent('pointermove', 5, 0);
 
       expect(events.length).to.be.greaterThan(0);
       expect(events[events.length - 1].traceSourceSubGeometryKind).to.be(
@@ -162,17 +168,18 @@ describe('ol/interaction/Draw with TraceSource', function () {
       const ends = [];
       draw.on('traceend', (e) => ends.push(e));
 
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
       simulateEvent('pointermove', 0, 0);
       simulateEvent('pointerdown', 0, 0);
       simulateEvent('pointerup', 0, 0);
-      simulateEvent('pointermove', 1, -1);
-      simulateEvent('pointerdown', 1, -1);
-      simulateEvent('pointerup', 1, -1);
 
-      // Click NOT on a vertex.
-      simulateEvent('pointermove', 1.3, -0.7);
-      simulateEvent('pointerdown', 1.3, -0.7);
-      simulateEvent('pointerup', 1.3, -0.7);
+      // Click at map [20, 0] — midpoint between the two vertices at [0,0]
+      // and [40,0], 20 units from each (> snap-tolerance 12). NOT a vertex.
+      simulateEvent('pointermove', 20, 0);
+      simulateEvent('pointerdown', 20, 0);
+      simulateEvent('pointerup', 20, 0);
 
       expect(ends).to.have.length(0);
     });
@@ -181,16 +188,82 @@ describe('ol/interaction/Draw with TraceSource', function () {
       const ends = [];
       draw.on('traceend', (e) => ends.push(e));
 
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
       simulateEvent('pointermove', 0, 0);
       simulateEvent('pointerdown', 0, 0);
       simulateEvent('pointerup', 0, 0);
-      simulateEvent('pointermove', 1, -1);
-      simulateEvent('pointerdown', 1, -1);
-      simulateEvent('pointerup', 1, -1);
 
-      simulateEvent('pointermove', 2, 0);
-      simulateEvent('pointerdown', 2, 0);
-      simulateEvent('pointerup', 2, 0);
+      simulateEvent('pointermove', 40, 0);
+      simulateEvent('pointerdown', 40, 0);
+      simulateEvent('pointerup', 40, 0);
+
+      expect(ends).to.have.length(1);
+    });
+  });
+
+  describe('exit on CircularString arc throughpoint', function () {
+    // Regression: the Snap interaction can land downCoordinate_ on a
+    // CircularString throughpoint (the mid control-point [bx,by,mx,my,ex,ey]).
+    // Throughpoints are NOT graph vertices in TraceSource — only arc
+    // start/end vertices are.  The direct getNearestVertex check therefore
+    // fails, and the trace would silently refuse to exit.
+    //
+    // Fix: if the active edge is a CircularString and the click is within
+    // snap tolerance of the arc's throughpoint, exit at the nearer of the
+    // arc's endpoint vertices.
+    let draw;
+
+    beforeEach(function () {
+      source.clear();
+      // Feature A: LineString ending at [0,0] — entry point for the trace.
+      source.addFeature(new Feature(new LineString([[-40, 0], [0, 0]])));
+      // Feature B: CircularString with start=[0,0], throughpoint=[20,15],
+      // end=[40,0].  Both graph vertices ([0,0] and [40,0]) are ≈25 units
+      // from the throughpoint [20,15] — well outside the default
+      // exitTolerance of 12 — so the direct getNearestVertex check will
+      // NOT find them when the click is at the throughpoint.
+      source.addFeature(
+        new Feature(new CircularString([[0, 0], [20, 15], [40, 0]])),
+      );
+      traceSource = new TraceSource({
+        features: source.getFeatures(),
+      });
+      draw = new Draw({
+        source: new VectorSource(),
+        type: 'LineString',
+        trace: true,
+        traceSource: traceSource,
+      });
+      map.addInteraction(draw);
+    });
+
+    it('fires traceend when click lands on a throughpoint of the active arc', function () {
+      const ends = [];
+      draw.on('traceend', (e) => ends.push(e));
+
+      // Start drawing at [0, 30] — clear of all vertices (≥ 25 units away).
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
+
+      // Click at [0,0] — a graph vertex shared by both features — to enter
+      // the trace.
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+
+      // Move onto the CircularString arc so it becomes the active edge.
+      // Screen offset (20, -15) → map coordinate [20, 15] = throughpoint.
+      simulateEvent('pointermove', 20, -15);
+
+      // Click at the throughpoint — a point ON the arc but NOT a graph vertex.
+      // Before the fix: getNearestVertex fails, traceend never fires.
+      // After the fix: throughpoint fallback fires, trace exits at the
+      //   nearer arc-endpoint vertex.
+      simulateEvent('pointerdown', 20, -15);
+      simulateEvent('pointerup', 20, -15);
 
       expect(ends).to.have.length(1);
     });

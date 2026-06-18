@@ -129,6 +129,9 @@ const controlPointSource = new VectorSource();
  */
 function collectCurveSegments(geom) {
   const result = [];
+  if (typeof geom.forEachCurveSegment !== 'function') {
+    return result;
+  }
   geom.forEachCurveSegment(function (bx, by, mx, my, ex, ey) {
     result.push([bx, by, mx, my, ex, ey]);
   });
@@ -436,7 +439,7 @@ function normalizeSegmentBreaks(breaks) {
 
 /**
  * Slice coords by breaks and produce a list of arc/line sub-geometries.
- * @param {Array<Array<number>>} coords Coordinates.
+ * @param {Array<Array<number>>} coords Coordinates (already canonical after getCanonicalCoordinates).
  * @param {Array<{index: number, type: string}>} breaks Segment breaks.
  * @return {Array<import('../src/ol/geom/SimpleGeometry.js').default>} Sub-geometries.
  */
@@ -481,7 +484,7 @@ function buildSketchSubs(coords, breaks) {
 
 /**
  * Build the final feature geometry from the sketch's coords/breaks.
- * @param {Array<Array<number>>} coords Coordinates.
+ * @param {Array<Array<number>>} coords Coordinates (already canonical — arc tessellations replaced).
  * @param {Array<{index: number, type: string}>} breaks Segment breaks.
  * @param {string} mode Draw mode.
  * @return {import('../src/ol/geom/Geometry.js').default} Final geometry.
@@ -490,12 +493,16 @@ function buildFinalGeometry(coords, breaks, mode) {
   if (mode === 'CircularString') {
     return new CircularString(coords);
   }
-  const subs = buildSketchSubs(coords, breaks);
+  const subs = buildSubsFromBreaks(coords, breaks);
+  const wrapped =
+    subs.length === 0
+      ? [new LineString(coords.length >= 2 ? coords : [coords[0], coords[0]])]
+      : subs;
   if (mode === 'CompoundCurve') {
-    return subs.length === 1 ? subs[0] : new CompoundCurve(subs);
+    return wrapped.length === 1 ? wrapped[0] : new CompoundCurve(wrapped);
   }
   // CurvePolygon
-  const ring = subs.length === 1 ? subs[0] : new CompoundCurve(subs);
+  const ring = wrapped.length === 1 ? wrapped[0] : new CompoundCurve(wrapped);
   return new CurvePolygon([ring]);
 }
 
@@ -943,6 +950,13 @@ const map = new Map({
 // Expose for browser inspection.
 /** @type {any} */ (window).__map = map;
 
+// ── Trace source ─────────────────────────────────────────────
+
+const traceSource = new TraceSource({
+  features: source.getFeaturesCollection(),
+  exteriorOnly: true,
+});
+
 // ── Modify + Snap interactions ───────────────────────────────
 
 const modify = new Modify({
@@ -977,6 +991,9 @@ modify.on('modifystart', () => {
 });
 
 modify.on('modifyend', (event) => {
+  // Invalidate the TraceSource graph so it reflects the updated vertex
+  // positions (e.g. when Modify connects two features at a shared node).
+  traceSource.invalidate();
   const featuresToCheck = event.features
     .getArray()
     .filter((f) => !f.get('_snapPoint'));
@@ -993,13 +1010,6 @@ modify.on('modifyend', (event) => {
     status('Edit accepted.');
   }
   modifyStartSnapshots.clear();
-});
-
-// ── Trace source ─────────────────────────────────────────────
-
-const traceSource = new TraceSource({
-  features: source.getFeaturesCollection(),
-  exteriorOnly: true,
 });
 
 // ── Draw interaction wiring ──────────────────────────────────
@@ -1034,21 +1044,30 @@ function wireTraceLifecycle(drawInteraction) {
     const type =
       e.traceSourceSubGeometryKind === 'CircularString' ? 'arc' : 'line';
     const last = segmentBreaks[segmentBreaks.length - 1];
+
     // Force a split at the trace-entry vertex even if its type matches the
-    // leading break's type. Without this, dedup against an already-arc
-    // leading break would leave the pre-trace stub (a 2-point free-draw
-    // sub) merged with the traced sequence and re-fitted as one bogus arc.
-    if (idx === traceStartIdx && (!last || last.index < idx)) {
-      segmentBreaks.push({index: idx, type});
+    // leading break's type (without this, the pre-trace freehand stub merges
+    // with the traced sequence into one bogus arc/line).
+    // Also handles traceStartIdx===0 where the initial break already exists.
+    if (traceStartIdx >= 0 && idx === traceStartIdx) {
+      if (!last || last.index < idx) {
+        segmentBreaks.push({index: idx, type});
+      }
       traceStartIdx = -1;
       return;
     }
+
+    // Same position re-fired: no duplicate break needed.
     if (last && last.type === type && last.index === idx) {
       return;
     }
-    if (last && last.type === type) {
-      return; // dedupe consecutive same-type stamps
+
+    // Consecutive line→line: one LineString segment is correct, no new break.
+    // Arc→arc must NOT be merged: each arc is its own sub-geometry.
+    if (last && last.type === 'line' && type === 'line') {
+      return;
     }
+
     segmentBreaks.push({index: idx, type});
   });
 
@@ -1226,9 +1245,11 @@ function addDrawInteraction() {
     // Replace the sketch's CompoundCurve with the proper final type.
     const mode = typeSelect.value;
     if (mode === 'CompoundCurve' || mode === 'CurvePolygon') {
-      const coords = lastSketchCoordinates.length
+      const raw = lastSketchCoordinates.length
         ? lastSketchCoordinates.map((c) => c.slice())
         : e.feature.getGeometry().getCoordinates();
+      // Replace tessellated arc points with the exact source control points.
+      const coords = draw.getCanonicalCoordinates(raw);
       // Close-by-duplicating-first for CurvePolygon if the user didn't.
       if (mode === 'CurvePolygon' && coords.length >= 3) {
         const first = coords[0];

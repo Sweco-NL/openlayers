@@ -104,6 +104,16 @@ class TraceSource {
   }
 
   /**
+   * Discard the cached graph so it will be rebuilt on the next query.
+   * Call this after any geometry change (e.g. after a Modify interaction
+   * moves a vertex) so the trace graph reflects the updated coordinates.
+   */
+  invalidate() {
+    this.vertices_ = null;
+    this.edges_ = null;
+  }
+
+  /**
    * @return {Array<import("../Feature.js").default>} Snapshot of source features.
    */
   getFeatures() {
@@ -496,6 +506,34 @@ class TraceSource {
     );
     /** @type {*} */ (edge).tessellation_ = {tolerance, coords};
     return coords;
+  }
+
+  /**
+   * Return the three canonical control points `[start, mid, end]` for a
+   * `CircularString` edge, or `[start, end]` for a `LineString` edge.
+   * Use these at `drawend` to replace tessellated arc coordinates with the
+   * exact source geometry control points.
+   *
+   * @param {TraceEdge} edge The edge.
+   * @return {Array<import("../coordinate.js").Coordinate>} Control points (3 for arcs, 2 for lines).
+   */
+  getEdgeControlPoints(edge) {
+    if (edge.kind === 'LineString') {
+      return [
+        edge.startVertex.coordinate.slice(),
+        edge.endVertex.coordinate.slice(),
+      ];
+    }
+    const circular = /** @type {import("../geom/CircularString.js").default} */ (
+      edge.subGeometry
+    );
+    const coords = circular.getCoordinates();
+    const i = /** @type {number} */ (edge.arcIndex);
+    return [
+      coords[2 * i].slice(),
+      coords[2 * i + 1].slice(),
+      coords[2 * i + 2].slice(),
+    ];
   }
 
   /**
