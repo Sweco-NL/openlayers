@@ -1055,9 +1055,23 @@ function wireTraceLifecycle(drawInteraction) {
   drawInteraction.on('traceend', (e) => {
     traceActive = false;
     traceStartIdx = -1;
-    // Stamp a return-to-user-segment-type break at the exit vertex (last
-    // committed coord, not the cursor tip).
-    const exitIdx = Math.max(0, lastSketchCoordinates.length - 2);
+    // Stamp a return-to-user-segment-type break that starts the post-trace
+    // free segment at the trace-exit vertex. At traceend time (which fires
+    // INSIDE `toggleTraceState_`, BEFORE the exit-click's `addToDrawing_`
+    // pushes the click coord), the trace walk has just tip-duplicated the
+    // exit vertex (via `appendCoordinates` which pops + pushes + tip-dups),
+    // so the sketch ends with two adjacent coords at the exit vertex
+    // (`length - 2` and `length - 1`). The exit-click's `addToDrawing_`
+    // then pushes a THIRD copy. Anchoring the next free segment at
+    // `length - 2` (the older walk-committed copy) makes the segment slice
+    // `[exit, exit, exit, next_free, ...]` — a 3-point CircularString
+    // through coincident points which renders as a wild degenerate arc
+    // that "consumes" everything that follows. Use `length - 1` (the
+    // walk's tip-dup) so the segment slice starts AFTER the first
+    // duplicate, yielding `[exit, exit, next_free, ...]` with the
+    // duplicate tucked at the segment's start (LineString- or
+    // arc-tail-tolerant) and the visible free segment fitting cleanly.
+    const exitIdx = Math.max(0, lastSketchCoordinates.length - 1);
     const last = segmentBreaks[segmentBreaks.length - 1];
     if (!last || last.index !== exitIdx || last.type !== currentSegType) {
       segmentBreaks.push({index: exitIdx, type: currentSegType});
