@@ -1008,13 +1008,17 @@ function wireTraceLifecycle(drawInteraction) {
   let traceStartIdx = -1;
   drawInteraction.on('tracestart', () => {
     traceActive = true;
-    // Anchor the trace's split point at the last *committed* sketch index
-    // (sketchCoords always has a trailing tip coord that is popped/repushed
-    // by appendCoordinates, so length-1 is unstable; length-2 is the true
-    // entry vertex). This lets the first `trace` event seed a break exactly
-    // at the trace-entry vertex even when its type matches the leading
-    // default break's type.
-    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 2);
+    // Anchor the trace-entry split point at the index where the just-clicked
+    // trace-anchor coordinate will land. Tracestart fires INSIDE
+    // `toggleTraceState_`, which runs BEFORE the click's `addToDrawing_`
+    // pushes the clicked coordinate, so the anchor is at
+    // `length - 1` (the current tip slot, which the click commit shifts
+    // into a real committed coord and re-tips). Off-by-one (using
+    // `length - 2`, the previous committed index) leaves the trace-entry
+    // break unstamped, which fed every traced coord plus the pre-trace
+    // freehand history into ONE CircularString — visibly bending the
+    // already-drawn "starting line" into the trace arc.
+    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 1);
     status('Tracing along boundary — click a vertex to exit.');
   });
 
