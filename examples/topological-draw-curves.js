@@ -1,6 +1,7 @@
 import Collection from '../src/ol/Collection.js';
 import Feature from '../src/ol/Feature.js';
 import Map from '../src/ol/Map.js';
+import {unByKey} from '../src/ol/Observable.js';
 import View from '../src/ol/View.js';
 import {noModifierKeys} from '../src/ol/events/condition.js';
 import CircularString from '../src/ol/geom/CircularString.js';
@@ -83,6 +84,20 @@ let lastSketchCoordinates = [];
 let traceExcludedFeatures = new Set();
 /** Trace-source rings whose boundary the sketch shares. */
 let traceBoundaryRings = [];
+/** The feature currently being actively traced (null when not tracing). */
+let currentTraceFeature = null;
+/** First committed vertex of the active draw session; null while not drawing. */
+let startCoord = null;
+/**
+ * Set of indices into lastSketchCoordinates that correspond to coordinates
+ * the user actually clicked (as opposed to trace-walk tessellation points).
+ * Only these indices are rendered as control-point dots.
+ */
+const userPlacedIndices = new Set();
+/** Entry index of the currently active trace (-1 when none). */
+let activeTraceEntryIdx = -1;
+/** Single-feature source holding the active draw's start vertex for snap-to-close. */
+const sketchSnapSource = new VectorSource();
 
 function updateMode() {
   if (!drawing) {
@@ -106,8 +121,13 @@ function resetSketchState() {
   drawing = false;
   traceActive = false;
   lastSketchCoordinates = [];
+  startCoord = null;
+  userPlacedIndices.clear();
+  activeTraceEntryIdx = -1;
   traceExcludedFeatures = new Set();
   traceBoundaryRings = [];
+  currentTraceFeature = null;
+  sketchSnapSource.clear();
   updateMode();
   setTopoStatus(true, '');
 }
@@ -622,6 +642,8 @@ function validateSketchTopology(geometry, checkOverlap) {
     }
     const totalEnd = data.ends[data.ends.length - 1];
 
+    // ── Self-intersection ─────────────────────────────────────────────────
+    // Tessellation-based check (fast, works for all geometry types).
     if (totalEnd >= 8) {
       const selfInt = getSelfIntersectionPoint(
         data.coords,
@@ -648,7 +670,9 @@ function validateSketchTopology(geometry, checkOverlap) {
       (mode === 'CurvePolygon' || mode === 'CompoundCurve') &&
       totalEnd >= 4
     ) {
-      const others = source.getFeatures().filter((f) => !f.get('_snapPoint'));
+      const others = source
+        .getFeatures()
+        .filter((f) => !f.get('_snapPoint') && f !== currentTraceFeature);
       const overlap = checkOverlapWithExisting(
         data.coords,
         totalEnd,
@@ -791,13 +815,25 @@ function sketchStyle(feature) {
   const mainColor = valid || errSeg ? '#28a745' : '#dc3545';
 
   if (geom.getType() === 'Point') {
+    // Size the cursor dot to signal what the NEXT click will commit:
+    //   small ring  = arc midpoint / throughpoint
+    //   large solid = arc endpoint or line vertex
+    let nextIsMid = false;
+    if (drawing && lastSketchCoordinates.length >= 1) {
+      const norm = normalizeSegmentBreaks(segmentBreaks);
+      const lastBreak = norm[norm.length - 1];
+      const committedInSeg = lastSketchCoordinates.length - 1 - lastBreak.index;
+      nextIsMid = lastBreak.type === 'arc' && committedInSeg % 2 === 1;
+    }
     return new Style({
       image: new CircleStyle({
-        radius: 5,
+        radius: nextIsMid ? 4 : 6,
         fill: new Fill({color: valid ? '#28a745' : '#dc3545'}),
+        stroke: nextIsMid ? new Stroke({color: '#fff', width: 1.5}) : undefined,
       }),
     });
   }
+
   const styles = [
     new Style({
       stroke: new Stroke({
@@ -819,6 +855,61 @@ function sketchStyle(feature) {
       }),
     );
   }
+
+  // Committed control-point overlay.
+  // Render a dot only for indices the user actually clicked; trace-walk
+  // tessellation points are excluded (they were never added to userPlacedIndices).
+  if (lastSketchCoordinates.length >= 2) {
+    const norm = normalizeSegmentBreaks(segmentBreaks);
+    const tipIdx = lastSketchCoordinates.length - 1;
+    for (let i = 0; i < tipIdx; i++) {
+      if (!userPlacedIndices.has(i)) {
+        continue;
+      }
+      // Find which segment this coordinate belongs to and derive its role.
+      let isMid = false;
+      for (let si = norm.length - 1; si >= 0; si--) {
+        if (i >= norm[si].index) {
+          isMid = norm[si].type === 'arc' && (i - norm[si].index) % 2 === 1;
+          break;
+        }
+      }
+      styles.push(
+        new Style({
+          geometry: new Point(lastSketchCoordinates[i]),
+          image: new CircleStyle({
+            radius: isMid ? 3 : 5,
+            fill: new Fill({color: isMid ? '#fff' : mainColor}),
+            stroke: new Stroke({color: mainColor, width: 1.5}),
+          }),
+        }),
+      );
+    }
+
+    // Dashed ring around the start vertex once the polygon has enough points
+    // to close. Tells the user: click here (snap will help) to finish.
+    if (
+      typeSelect.value === 'CurvePolygon' &&
+      startCoord &&
+      lastSketchCoordinates.length >= 4
+    ) {
+      styles.push(
+        new Style({
+          geometry: new Point(startCoord),
+          image: new CircleStyle({
+            radius: 11,
+            fill: new Fill({color: 'rgba(40, 167, 69, 0.12)'}),
+            stroke: new Stroke({
+              color: mainColor,
+              width: 2,
+              lineDash: [4, 3],
+            }),
+          }),
+        }),
+      );
+    }
+  }
+
   return styles;
 }
 
@@ -891,8 +982,14 @@ function controlPointStyle(feature) {
   });
 }
 
+let modifyActive = false;
+
 source.on(['addfeature', 'removefeature', 'changefeature'], () => {
-  rebuildControlPointSource();
+  // Skip during modify drag — rebuilding on every mousemove causes jank.
+  // modifyend triggers a final rebuild after the drag completes.
+  if (!modifyActive) {
+    rebuildControlPointSource();
+  }
 });
 
 // ── Map setup ────────────────────────────────────────────────
@@ -973,14 +1070,28 @@ const controlPointSnap = new Snap({
   edge: false,
   pixelTolerance: 20,
 });
+// Snaps to the start vertex of the active draw so a single click closes a CurvePolygon.
+const sketchSnap = new Snap({
+  source: sketchSnapSource,
+  vertex: true,
+  edge: false,
+  pixelTolerance: 20,
+});
 map.addInteraction(modify);
 map.addInteraction(snap);
 map.addInteraction(controlPointSnap);
+map.addInteraction(sketchSnap);
 
 /** @type {Map<import('../src/ol/Feature.js').default, import('../src/ol/geom/Geometry.js').default>} */
 const modifyStartSnapshots = new window.Map();
 
-modify.on('modifystart', () => {
+/** @type {Array<import('../src/ol/events.js').EventsKey>} */
+let modifyChangeKeys = [];
+/** @type {Set<import('../src/ol/Feature.js').default>} */
+let modifyTargetFeatures = new Set();
+
+modify.on('modifystart', (event) => {
+  modifyActive = true;
   modifyStartSnapshots.clear();
   source.getFeatures().forEach((f) => {
     if (f.get('_snapPoint')) {
@@ -988,9 +1099,42 @@ modify.on('modifystart', () => {
     }
     modifyStartSnapshots.set(f, f.getGeometry().clone());
   });
+
+  // Live crossing feedback: validate on every geometry change during drag.
+  // Debounce so that co-grabbed vertices (multiple change events per frame)
+  // only trigger one validation pass per animation frame.
+  modifyTargetFeatures = new Set(
+    event.features.getArray().filter((f) => !f.get('_snapPoint')),
+  );
+  let validationScheduled = false;
+  modifyChangeKeys = [];
+  for (const f of modifyTargetFeatures) {
+    const key = f.on('change', () => {
+      if (!validationScheduled) {
+        validationScheduled = true;
+        requestAnimationFrame(() => {
+          validationScheduled = false;
+          // modifyActive may have been set to false by modifyend before this
+          // rAF fires. Guard so we never overwrite validationState after the
+          // modify session has ended — that would corrupt the isValid flag and
+          // cause finishCondition to block the next draw.
+          if (modifyActive) {
+            validateFeatures([...modifyTargetFeatures]);
+            source.changed();
+          }
+        });
+      }
+    });
+    modifyChangeKeys.push(key);
+  }
 });
 
 modify.on('modifyend', (event) => {
+  modifyActive = false;
+  // Remove live-validation listeners.
+  modifyChangeKeys.forEach(unByKey);
+  modifyChangeKeys = [];
+
   // Invalidate the TraceSource graph so it reflects the updated vertex
   // positions (e.g. when Modify connects two features at a shared node).
   traceSource.invalidate();
@@ -1007,9 +1151,11 @@ modify.on('modifyend', (event) => {
     setTopoStatus(true, '');
     status('Edit reverted: would create a topological invalid feature.');
   } else {
+    setTopoStatus(true, '');
     status('Edit accepted.');
   }
   modifyStartSnapshots.clear();
+  rebuildControlPointSource();
 });
 
 // ── Draw interaction wiring ──────────────────────────────────
@@ -1018,6 +1164,7 @@ function wireTraceLifecycle(drawInteraction) {
   let traceStartIdx = -1;
   drawInteraction.on('tracestart', () => {
     traceActive = true;
+    currentTraceFeature = null;
     // Anchor the trace-entry split point at the index where the just-clicked
     // trace-anchor coordinate will land. Tracestart fires INSIDE
     // `toggleTraceState_`, which runs BEFORE the click's `addToDrawing_`
@@ -1029,10 +1176,18 @@ function wireTraceLifecycle(drawInteraction) {
     // freehand history into ONE CircularString — visibly bending the
     // already-drawn "starting line" into the trace arc.
     traceStartIdx = Math.max(0, lastSketchCoordinates.length - 1);
+    activeTraceEntryIdx = traceStartIdx;
+    // Record the trace-entry vertex as user-placed so its dot is shown.
+    // tracestart fires BEFORE addToDrawing_ commits the click, but the entry
+    // coord ends up at exactly this index (the current tip slot).
+    userPlacedIndices.add(activeTraceEntryIdx);
     status('Tracing along boundary — click a vertex to exit.');
   });
 
   drawInteraction.on('trace', (e) => {
+    if (e.traceSourceFeature) {
+      currentTraceFeature = e.traceSourceFeature;
+    }
     if (lastSketchCoordinates.length < 2) {
       return;
     }
@@ -1074,6 +1229,7 @@ function wireTraceLifecycle(drawInteraction) {
   drawInteraction.on('traceend', (e) => {
     traceActive = false;
     traceStartIdx = -1;
+    currentTraceFeature = null;
     // Stamp a return-to-user-segment-type break that starts the post-trace
     // free segment at the trace-exit vertex. At traceend time (which fires
     // INSIDE `toggleTraceState_`, BEFORE the exit-click's `addToDrawing_`
@@ -1090,6 +1246,7 @@ function wireTraceLifecycle(drawInteraction) {
     // duplicate, yielding `[exit, exit, next_free, ...]` with the
     // duplicate tucked at the segment's start (LineString- or
     // arc-tail-tolerant) and the visible free segment fitting cleanly.
+    activeTraceEntryIdx = -1;
     const exitIdx = Math.max(0, lastSketchCoordinates.length - 1);
     const last = segmentBreaks[segmentBreaks.length - 1];
     if (!last || last.index !== exitIdx || last.type !== currentSegType) {
@@ -1159,7 +1316,6 @@ function addDrawInteraction() {
     // CompoundCurve or CurvePolygon — mixed arc/line via segment breaks.
     const isCurvePolygon = mode === 'CurvePolygon';
     let closing = false;
-    let startCoord = null;
 
     draw = new Draw({
       source,
@@ -1170,7 +1326,19 @@ function addDrawInteraction() {
       style: sketchStyle,
       condition: checkCrossingCondition,
       geometryFunction(coordinates, geometry) {
+        const prevLen = lastSketchCoordinates.length;
         lastSketchCoordinates = coordinates.map((c) => c.slice());
+        // Track user-clicked indices (not trace-walk tessellation).
+        // addToDrawing_ grows length by 1; modifyDrawing_ keeps length equal.
+        // Trace-walk addToDrawing_ calls are guarded by traceActive.
+        if (
+          drawing &&
+          !traceActive &&
+          prevLen > 0 &&
+          lastSketchCoordinates.length === prevLen + 1
+        ) {
+          userPlacedIndices.add(lastSketchCoordinates.length - 2);
+        }
         const subs = buildSketchSubs(coordinates, segmentBreaks);
 
         if (!geometry) {
@@ -1223,9 +1391,19 @@ function addDrawInteraction() {
       segmentBreaks = [{index: 0, type: 'arc'}];
       traceExcludedFeatures = new Set();
       traceBoundaryRings = [];
+      userPlacedIndices.clear();
+      userPlacedIndices.add(0); // first vertex
       const coords = e.feature.getGeometry().getCoordinates();
       if (coords.length > 0) {
         startCoord = coords[0].slice();
+        // Populate the sketch-snap source with the start vertex so the user
+        // can single-click it (snapped) to close a CurvePolygon.
+        if (isCurvePolygon) {
+          sketchSnapSource.clear();
+          sketchSnapSource.addFeature(
+            new Feature({geometry: new Point(startCoord)}),
+          );
+        }
       }
       updateMode();
     });
@@ -1250,6 +1428,68 @@ function addDrawInteraction() {
         : e.feature.getGeometry().getCoordinates();
       // Replace tessellated arc points with the exact source control points.
       const coords = draw.getCanonicalCoordinates(raw);
+      // segmentBreaks holds indices into `raw`. After canonicalization the
+      // array is shorter (interior tessellation points spliced out), so each
+      // break's index must be remapped to its position in `coords`.
+      // Breaks are non-decreasing in raw-index order and must remain so in
+      // canonical-index order.  Scan forward from the previous break's
+      // canonical position to avoid landing on an earlier duplicate coordinate
+      // (e.g. raw[74]==raw[75]==[1000000,0]: a linear scan from 0 would map
+      // both breaks to canonical index 74 instead of 74 and 75).
+      const canonicalBreaks = [];
+      let searchFrom = 0;
+      for (const b of segmentBreaks) {
+        const rawCoord = raw[b.index];
+        if (!rawCoord) {
+          canonicalBreaks.push(b);
+          continue;
+        }
+        let found = -1;
+        for (let ci = searchFrom; ci < coords.length; ci++) {
+          if (
+            Math.abs(coords[ci][0] - rawCoord[0]) < 1e-6 &&
+            Math.abs(coords[ci][1] - rawCoord[1]) < 1e-6
+          ) {
+            found = ci;
+            break;
+          }
+        }
+        if (found === -1) {
+          // Fallback: coordinate was removed — clamp to end.
+          found = Math.min(b.index, coords.length - 1);
+        }
+        canonicalBreaks.push({index: found, type: b.type});
+        searchFrom = found; // next break must be >= this canonical position
+      }
+      // Deduplicate breaks that mapped to the same canonical index (can happen
+      // when two adjacent raw coords are equal — e.g. the trace-exit dupicate
+      // raw[74]==raw[75] both map to the same canonical slot).  Keep the last
+      // entry at each index so the post-trace segment type wins.
+      const deduped = normalizeSegmentBreaks(canonicalBreaks);
+      /* eslint-disable no-console */
+      console.group('%c[CANONICAL DUMP]', 'color:#f80;font-weight:bold');
+      console.log(
+        'canonical coords:',
+        coords.map((c) => `[${c[0].toFixed(1)},${c[1].toFixed(1)}]`).join(' '),
+      );
+      console.log(
+        'deduped breaks:',
+        deduped.map((b) => `{${b.index},${b.type}}`).join(' '),
+      );
+      const canSubs = buildSketchSubs(coords, deduped);
+      canSubs.forEach((sub, i) => {
+        const c = sub.getCoordinates ? sub.getCoordinates() : [];
+        const label = `${sub.getType()}  pts=${c.length}`;
+        if (c.length <= 10) {
+          console.log(
+            `  [${i}] ${label}  ${c.map((p) => `[${p[0].toFixed(1)},${p[1].toFixed(1)}]`).join(' → ')}`,
+          );
+        } else {
+          console.log(`  [${i}] ${label}`);
+        }
+      });
+      console.groupEnd();
+      /* eslint-enable no-console */
       // Close-by-duplicating-first for CurvePolygon if the user didn't.
       if (mode === 'CurvePolygon' && coords.length >= 3) {
         const first = coords[0];
@@ -1258,7 +1498,7 @@ function addDrawInteraction() {
           coords.push(first.slice());
         }
       }
-      e.feature.setGeometry(buildFinalGeometry(coords, segmentBreaks, mode));
+      e.feature.setGeometry(buildFinalGeometry(coords, deduped, mode));
     }
     resetSketchState();
     status('Feature added. Draw another or switch to edit mode.');
@@ -1274,10 +1514,13 @@ function addDrawInteraction() {
   // Re-add snap interactions so they process before draw (last-added → first-handled).
   map.removeInteraction(snap);
   map.removeInteraction(controlPointSnap);
+  map.removeInteraction(sketchSnap);
   snap.setActive(true);
   controlPointSnap.setActive(true);
+  sketchSnap.setActive(true);
   map.addInteraction(snap);
   map.addInteraction(controlPointSnap);
+  map.addInteraction(sketchSnap);
 }
 
 addDrawInteraction();
@@ -1289,6 +1532,11 @@ typeSelect.addEventListener('change', addDrawInteraction);
 document.getElementById('undo').addEventListener('click', () => {
   if (!draw) {
     return;
+  }
+  // Remove the just-uncommitted index from user-placed tracking before the
+  // coordinate is dropped from lastSketchCoordinates.
+  if (lastSketchCoordinates.length >= 2) {
+    userPlacedIndices.delete(lastSketchCoordinates.length - 2);
   }
   draw.removeLastPoint();
   if (segmentBreaks.length > 1) {
@@ -1365,7 +1613,193 @@ document.addEventListener('keydown', (e) => {
   );
 });
 
-// Spacebar — same as T, secondary binding for accessibility/touchpads.
+// ── Validation debug dump ─────────────────────────────────────
+// Track last pointer map-coordinate so Space can find the hovered feature.
+/** @type {Array<number>|null} */
+let lastPointerCoord = null;
+map.on('pointermove', (e) => {
+  lastPointerCoord = e.coordinate;
+});
+
+/**
+ * Surgical validation dump. Press Space while hovering a feature to see
+ * exactly what validateFeatures does (and doesn't) find for it.
+ *
+ * Prints:
+ *  1. Current global validationState.
+ *  2. The feature under the cursor + its geometry type / arc-segment count.
+ *  3. Self-intersection check result.
+ *  4. Per-pair crossing check against every other source feature,
+ *     with both arc arrays and the raw crossing result.
+ */
+/* eslint-disable no-console */
+function dumpValidation() {
+  function c2(c) {
+    return `[${c[0].toFixed(0)},${c[1].toFixed(0)}]`;
+  }
+  function seg6(s) {
+    return `b${c2(s)} m${c2([s[2], s[3]])} e${c2([s[4], s[5]])}`;
+  }
+
+  console.group(
+    `%c[VALIDATION DUMP] ${new Date().toISOString()}`,
+    'color:#f80;font-weight:bold',
+  );
+
+  // ── 1. Current validation state ──────────────────────────
+  console.group(
+    `validationState  isValid=${validationState.isValid}  crossings=${validationState.crossingPoints.length}`,
+  );
+  validationState.crossingPoints.forEach((p, i) =>
+    console.log(`  crossing[${i}]: ${c2(p)}`),
+  );
+  console.groupEnd();
+
+  // ── 2. Feature under cursor ───────────────────────────────
+  const allFeatures = source.getFeatures().filter((f) => !f.get('_snapPoint'));
+
+  let hoveredFeature = null;
+  if (lastPointerCoord) {
+    hoveredFeature = source.getClosestFeatureToCoordinate(
+      lastPointerCoord,
+      (f) => !f.get('_snapPoint'),
+    );
+  }
+  if (!hoveredFeature && allFeatures.length > 0) {
+    hoveredFeature = allFeatures[0];
+    console.log('(no cursor coord — falling back to first feature)');
+  }
+  if (!hoveredFeature) {
+    console.log('no features in source');
+    console.groupEnd();
+    return;
+  }
+
+  const hg = hoveredFeature.getGeometry();
+  const hType = hg ? hg.getType() : 'null';
+  const hArcs = hg ? collectCurveSegments(hg) : [];
+  const hIdx = allFeatures.indexOf(hoveredFeature);
+  console.log(
+    `hovered feature[${hIdx}]  type=${hType}  arcSegs=${hArcs.length}`,
+  );
+  if (hArcs.length > 0) {
+    console.group('arc segments');
+    hArcs.forEach((s, i) => console.log(`  [${i}] ${seg6(s)}`));
+    console.groupEnd();
+  }
+
+  // flat tess data
+  const hFlat = hg ? getTessellatedFlatCoords(hg) : null;
+  if (hFlat) {
+    console.log(
+      `tess flat: ${hFlat.coords.length / 2} pts  ends=[${hFlat.ends.join(',')}]`,
+    );
+  } else {
+    console.log('tess flat: null (getTessellatedFlatCoords returned null)');
+  }
+
+  // ── 3. Self-intersection ──────────────────────────────────
+  if (hType === 'CurvePolygon' && hg) {
+    let selfX;
+    try {
+      selfX = hg.getSelfIntersections(
+        CROSSING_EPSILON_SQ,
+        SAME_ARC_TOLERANCE_SQ,
+      );
+    } catch (err) {
+      selfX = null;
+      console.log(`getSelfIntersections threw: ${err.message}`);
+    }
+    if (selfX) {
+      console.log(
+        `getSelfIntersections: ${selfX.length === 0 ? 'NONE' : selfX.map(c2).join(' ')}`,
+      );
+    }
+  } else {
+    console.log(`getSelfIntersections: skipped (type=${hType})`);
+  }
+
+  // ── 4. Pair-wise crossing checks ─────────────────────────
+  console.group(`pair-wise checks vs ${allFeatures.length - 1} other(s)`);
+  for (const other of allFeatures) {
+    if (other === hoveredFeature) {
+      continue;
+    }
+    const og = other.getGeometry();
+    const oType = og ? og.getType() : 'null';
+    const oIdx = allFeatures.indexOf(other);
+    const oArcs = og ? collectCurveSegments(og) : [];
+
+    if (hType === 'CurvePolygon' && oType === 'CurvePolygon' && hg && og) {
+      // arc-vs-arc path
+      let cross;
+      try {
+        cross = getArcArrayCrossings(
+          hArcs,
+          oArcs,
+          CROSSING_EPSILON_SQ,
+          true,
+          SAME_ARC_TOLERANCE_SQ,
+        );
+      } catch (err) {
+        console.log(
+          `  [${hIdx}] vs [${oIdx}]  getArcArrayCrossings threw: ${err.message}`,
+        );
+        continue;
+      }
+      console.group(
+        `  [${hIdx}](CvP,arcs=${hArcs.length}) vs [${oIdx}](CvP,arcs=${oArcs.length})  → crossings=${cross.length}`,
+      );
+      cross.forEach((p, i) => console.log(`    crossing[${i}]: ${c2(p)}`));
+      if (cross.length === 0) {
+        // Show a sample of each arc array so we can spot obvious mismatches.
+        if (hArcs.length > 0) {
+          console.log(`    hovered arcs[0]: ${seg6(hArcs[0])}`);
+        }
+        if (oArcs.length > 0) {
+          console.log(`    other   arcs[0]: ${seg6(oArcs[0])}`);
+        }
+      }
+      console.groupEnd();
+    } else {
+      // flat-segment path
+      const a = hg ? getTessellatedFlatCoords(hg) : null;
+      const b = og ? getTessellatedFlatCoords(og) : null;
+      if (!a || !b) {
+        console.log(
+          `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  → SKIP (flat=null: a=${!a} b=${!b})`,
+        );
+        continue;
+      }
+      let cross;
+      try {
+        cross = getSegmentsCrossingPoint(
+          a.coords,
+          0,
+          a.ends[0],
+          b.coords,
+          0,
+          b.ends[0],
+          2,
+        );
+      } catch (err) {
+        console.log(
+          `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  getSegmentsCrossingPoint threw: ${err.message}`,
+        );
+        continue;
+      }
+      console.log(
+        `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  flatPts: ${a.coords.length / 2} vs ${b.coords.length / 2}  → ${cross ? `CROSS ${c2(cross)}` : 'none'}`,
+      );
+    }
+  }
+  console.groupEnd();
+
+  console.groupEnd();
+}
+/* eslint-enable no-console */
+
+// Spacebar — validation dump (works at any time, not just during drawing).
 document.addEventListener('keydown', (e) => {
   if (e.key !== ' ' && e.code !== 'Space') {
     return;
@@ -1374,11 +1808,13 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
     return;
   }
-  if (!draw || !drawing) {
-    return;
-  }
   e.preventDefault();
-  document.dispatchEvent(new KeyboardEvent('keydown', {key: 't'}));
+  try {
+    dumpValidation();
+  } catch (err) {
+    /* eslint-disable-next-line no-console */
+    console.error('[SPACE] dumpValidation threw:', err);
+  }
 });
 
 // ESC — abort current draw and switch to edit mode.

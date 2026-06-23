@@ -1372,15 +1372,33 @@ class Draw extends PointerInteraction {
         continue;
       }
       const ctrlPts = traceSource.getEdgeControlPoints(edge);
-      // ctrlPts = [start, mid, end]. start and end are already in result at
-      // startOff and endOff respectively; only mid needs to be inserted.
-      // Replace the interior tessellation points with just the arc midpoint.
+      // ctrlPts = [start, mid, end].  start and end are already in result at
+      // startOff and endOff (placed there by appendCoordinates / Snap);
+      // only the single mid throughpoint needs to replace the interior
+      // tessellation points.
+      // Interior positions: startOff+1 .. endOff-1  →  interiorCount items.
+      // Using interiorCount-1 (the previous value) left one tessellation point
+      // at endOff-1, producing a spurious 2-pt LineString segment.
       const interiorCount = endOff - startOff - 1;
       if (interiorCount <= 0) {
         continue;
       }
-      // Splice out (interiorCount) interior points, insert the single midpoint.
-      result.splice(startOff + 1, interiorCount - 1, ctrlPts[1]);
+      result.splice(startOff + 1, interiorCount, ctrlPts[1]);
+
+      // appendCoordinates (trace walk) places the arc endpoint at the last
+      // tessellation position (raw[endOff]).  The vertex-only-exit handler
+      // then calls addToDrawing_ which pushes the same vertex a second time
+      // (raw[endOff+1]).  After the interior splice those two copies end up
+      // adjacent at result[startOff+2] and result[startOff+3].  Remove the
+      // extra copy so the post-trace user segment starts cleanly.
+      const newEnd = startOff + 2;
+      if (
+        newEnd + 1 < result.length &&
+        result[newEnd][0] === result[newEnd + 1][0] &&
+        result[newEnd][1] === result[newEnd + 1][1]
+      ) {
+        result.splice(newEnd + 1, 1);
+      }
     }
 
     return result;
@@ -1698,6 +1716,15 @@ class Draw extends PointerInteraction {
     //    edge traversed since `tracestart`). Three branches:
     //    a) BACKTRACK — newEdge is the previous edge in the stack: pop the
     //       top, removing its appended points from the sketch.
+    //    a2) DEEP BACKTRACK — newEdge already exists further back in the
+    //       stack (not just at prev). This happens when the cursor
+    //       oscillates at a busy junction, pushing multiple redundant
+    //       entries for the same edge objects. A one-step pop would leave
+    //       the stack with a broken chain — later entries may share no
+    //       vertex with their new predecessors, making getActiveEdge's
+    //       graph-walk constraint physically unable to return the predecessor
+    //       edge. Fix: pop everything above the earlier occurrence at once,
+    //       undoing all their accumulated points in a single call.
     //    b) ADVANCE — newEdge is fresh: complete the current top to its
     //       shared-vertex endpoint, then push a new entry for newEdge.
     //    c) INITIAL — stack was empty: just push the first entry.
@@ -1714,44 +1741,71 @@ class Draw extends PointerInteraction {
         // The new top resumes — its endIndex remains at the just-vacated
         // shared vertex's index (set when this edge was finalized below).
       } else if (newEdge) {
-        // (b) ADVANCE or (c) INITIAL: complete current top, push new entry.
-        let entryVertex = null;
-        if (top) {
-          // Pick the shared vertex closest to the cursor's current position
-          // on `top.edge` (i.e. the side of `top.edge` we're crossing off
-          // from). Falling back to declaration order makes the walk retract
-          // all the way back to the wrong endpoint when both endpoints
-          // happen to neighbour `newEdge`, which visibly destroys the
-          // sketch right before the new edge takes over -- the
-          // junction-crossing line-disappear bug.
-          const shared = findSharedTraceVertexNear(top, newEdge);
-          if (shared) {
-            const sharedIndexOld =
-              shared === top.edge.startVertex ? 0 : top.tessellation.length - 1;
-            this.advancePrimitiveTraceProgress_(top, sharedIndexOld);
-            entryVertex = shared;
+        // (a2) DEEP BACKTRACK: newEdge already exists deeper than prev.
+        // Search from just below prev downward (most-recent first).
+        let deepIdx = -1;
+        for (let k = stack.length - 3; k >= 0; --k) {
+          if (stack[k].edge === newEdge) {
+            deepIdx = k;
+            break;
           }
         }
-        if (!entryVertex) {
-          entryVertex =
-            this.pickPrimitiveTraceEntryVertex_(newEdge, sample) ||
-            newEdge.startVertex;
+        if (deepIdx >= 0) {
+          // Pop everything above deepIdx, removing all their sketch points.
+          let totalRemove = 0;
+          for (let k = deepIdx + 1; k < stack.length; ++k) {
+            totalRemove += stack[k].pointsAdded;
+          }
+          stack.splice(deepIdx + 1);
+          if (totalRemove > 0) {
+            this.removeLastPoints_(totalRemove);
+          }
+          // stack[deepIdx] is now the top; its endIndex is frozen at the
+          // shared-vertex position it was advanced to when its (now-popped)
+          // successor was first pushed. The walk in step 4 will retract it
+          // further as the cursor moves backward.
+        } else {
+          // (b) ADVANCE or (c) INITIAL: complete current top, push new entry.
+          let entryVertex = null;
+          if (top) {
+            // Pick the shared vertex closest to the cursor's current position
+            // on `top.edge` (i.e. the side of `top.edge` we're crossing off
+            // from). Falling back to declaration order makes the walk retract
+            // all the way back to the wrong endpoint when both endpoints
+            // happen to neighbour `newEdge`, which visibly destroys the
+            // sketch right before the new edge takes over -- the
+            // junction-crossing line-disappear bug.
+            const shared = findSharedTraceVertexNear(top, newEdge);
+            if (shared) {
+              const sharedIndexOld =
+                shared === top.edge.startVertex
+                  ? 0
+                  : top.tessellation.length - 1;
+              this.advancePrimitiveTraceProgress_(top, sharedIndexOld);
+              entryVertex = shared;
+            }
+          }
+          if (!entryVertex) {
+            entryVertex =
+              this.pickPrimitiveTraceEntryVertex_(newEdge, sample) ||
+              newEdge.startVertex;
+          }
+          // Use the default ~5° angular step for arc tessellation (no
+          // tolerance arg). The snap tolerance is for sticky-edge resolution
+          // and vertex-hit distance, not for how smoothly the trace hugs an
+          // arc; passing it here yielded coarse 4-segment arcs that visibly
+          // deviated from the source by ~one snap radius.
+          const tess = traceSource.tessellateEdge(newEdge);
+          const startIndex =
+            entryVertex === newEdge.startVertex ? 0 : tess.length - 1;
+          stack.push({
+            edge: newEdge,
+            tessellation: tess,
+            startIndex: startIndex,
+            endIndex: startIndex,
+            pointsAdded: 0,
+          });
         }
-        // Use the default ~5° angular step for arc tessellation (no
-        // tolerance arg). The snap tolerance is for sticky-edge resolution
-        // and vertex-hit distance, not for how smoothly the trace hugs an
-        // arc; passing it here yielded coarse 4-segment arcs that visibly
-        // deviated from the source by ~one snap radius.
-        const tess = traceSource.tessellateEdge(newEdge);
-        const startIndex =
-          entryVertex === newEdge.startVertex ? 0 : tess.length - 1;
-        stack.push({
-          edge: newEdge,
-          tessellation: tess,
-          startIndex: startIndex,
-          endIndex: startIndex,
-          pointsAdded: 0,
-        });
       }
       // If newEdge is null we keep the current stack untouched (cursor wandered
       // off the graph; sticky-closest should normally avoid this).
