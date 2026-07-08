@@ -110,3 +110,61 @@ export function getSegmentsCrossingPoint(
   }
   return undefined;
 }
+
+/**
+ * Find all proper crossing points between two sets of segments
+ * (e.g. two linear rings or two linestrings).
+ *
+ * Uses strict bounds (0 < t < 1 and 0 < u < 1) so that shared endpoints
+ * (e.g. two polygons touching at a vertex) are NOT reported as crossings,
+ * and collinear/overlapping segments return no results.
+ *
+ * @param {Array<number>} flatCoordinates1 Flat coordinates of the first geometry.
+ * @param {number} offset1 Offset into flatCoordinates1.
+ * @param {number} end1 End index in flatCoordinates1.
+ * @param {Array<number>} flatCoordinates2 Flat coordinates of the second geometry.
+ * @param {number} offset2 Offset into flatCoordinates2.
+ * @param {number} end2 End index in flatCoordinates2.
+ * @param {number} stride Stride.
+ * @return {Array<import("../../coordinate.js").Coordinate>} All crossing points,
+ *   or an empty array if no edges cross.
+ */
+export function getSegmentsCrossingPoints(
+  flatCoordinates1,
+  offset1,
+  end1,
+  flatCoordinates2,
+  offset2,
+  end2,
+  stride,
+) {
+  const result = [];
+  for (let i = offset1 + stride; i < end1; i += stride) {
+    const ax = flatCoordinates1[i - stride];
+    const ay = flatCoordinates1[i - stride + 1];
+    const bx = flatCoordinates1[i];
+    const by = flatCoordinates1[i + 1];
+
+    for (let j = offset2 + stride; j < end2; j += stride) {
+      const cx = flatCoordinates2[j - stride];
+      const cy = flatCoordinates2[j - stride + 1];
+      const dx = flatCoordinates2[j];
+      const dy = flatCoordinates2[j + 1];
+
+      const denom = (ax - bx) * (cy - dy) - (ay - by) * (cx - dx);
+      if (denom === 0) {
+        // Parallel or collinear — no proper crossing
+        continue;
+      }
+
+      const t = ((ax - cx) * (cy - dy) - (ay - cy) * (cx - dx)) / denom;
+      const u = ((ax - cx) * (ay - by) - (ay - cy) * (ax - bx)) / denom;
+
+      // Strict bounds: exclude endpoint touches
+      if (t > 0 && t < 1 && u > 0 && u < 1) {
+        result.push([ax + t * (bx - ax), ay + t * (by - ay)]);
+      }
+    }
+  }
+  return result;
+}

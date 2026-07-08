@@ -745,7 +745,7 @@ export default CompoundCurve;
  * @param {Array<Array<number>>} coordinates Array of [x, y] coordinates.
  * @param {string} [type] Segment type: 'arc' or 'line'.
  * @param {number} [closeTolerance] Tolerance for closed-ring detection (unused; reserved).
- * @return {import("./SimpleGeometry.js").default} The resulting geometry.
+ * @return {LineString|CircularString|CompoundCurve} The resulting geometry.
  */
 export function coordinatesToCurveGeometry(coordinates, type, closeTolerance) {
   if (type === undefined) {

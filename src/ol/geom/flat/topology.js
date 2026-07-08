@@ -136,7 +136,7 @@ export function getLineLineCrossingPoint(x1, y1, x2, y2, x3, y3, x4, y4) {
 }
 
 /**
- * Find the first crossing point between a line segment and a circular arc.
+ * Find the crossing points between a line segment and a circular arc.
  * @param {number} x1 Line start X.
  * @param {number} y1 Line start Y.
  * @param {number} x2 Line end X.
@@ -148,7 +148,7 @@ export function getLineLineCrossingPoint(x1, y1, x2, y2, x3, y3, x4, y4) {
  * @param {number} ex Arc end X.
  * @param {number} ey Arc end Y.
  * @param {number} epsilonSq Squared distance threshold for endpoint filtering.
- * @return {Array<number>|null} [x, y] crossing point or null.
+ * @return {Array<Array<number>>} Array of [x, y] crossing points (empty when none).
  */
 export function getLineArcCrossingPoint(
   x1,

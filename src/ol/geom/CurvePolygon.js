@@ -896,9 +896,15 @@ class CurvePolygon extends Geometry {
       const ring = rings[i];
       const type = ring.getType();
       if (type === 'CircularString' || type === 'CompoundCurve') {
-        const ret = ring.forEachCurveSegment(function (bx, by, mx, my, ex, ey) {
-          return callback(bx, by, mx, my, ex, ey, globalIndex++);
-        });
+        const curveRing =
+          /** @type {import("./CircularString.js").default|import("./CompoundCurve.js").default} */ (
+            ring
+          );
+        const ret = curveRing.forEachCurveSegment(
+          function (bx, by, mx, my, ex, ey) {
+            return callback(bx, by, mx, my, ex, ey, globalIndex++);
+          },
+        );
         if (ret) {
           return ret;
         }

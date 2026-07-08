@@ -218,14 +218,27 @@ describe('ol/interaction/Draw with TraceSource', function () {
     beforeEach(function () {
       source.clear();
       // Feature A: LineString ending at [0,0] — entry point for the trace.
-      source.addFeature(new Feature(new LineString([[-40, 0], [0, 0]])));
+      source.addFeature(
+        new Feature(
+          new LineString([
+            [-40, 0],
+            [0, 0],
+          ]),
+        ),
+      );
       // Feature B: CircularString with start=[0,0], throughpoint=[20,15],
       // end=[40,0].  Both graph vertices ([0,0] and [40,0]) are ≈25 units
       // from the throughpoint [20,15] — well outside the default
       // exitTolerance of 12 — so the direct getNearestVertex check will
       // NOT find them when the click is at the throughpoint.
       source.addFeature(
-        new Feature(new CircularString([[0, 0], [20, 15], [40, 0]])),
+        new Feature(
+          new CircularString([
+            [0, 0],
+            [20, 15],
+            [40, 0],
+          ]),
+        ),
       );
       traceSource = new TraceSource({
         features: source.getFeatures(),
@@ -266,6 +279,125 @@ describe('ol/interaction/Draw with TraceSource', function () {
       simulateEvent('pointerup', 20, -15);
 
       expect(ends).to.have.length(1);
+    });
+  });
+
+  describe('trace entry anchors to graph vertex (rogue-arc regression)', function () {
+    // Regression: the trace-entry click is only required to fall WITHIN vertex
+    // tolerance of a graph vertex — it need not be exactly on it, and a Snap
+    // interaction can re-land it on a non-vertex point. That off-vertex
+    // coordinate used to be committed verbatim at the entry index. Because
+    // canonicalizeTraceRun_ skips the entry vertex (assuming it is already the
+    // exact graph vertex) and builds the first canonical arc from the next
+    // control points, an off-vertex entry produced a wild, near-collinear
+    // "rogue arc" that does not exist on the traced geometry.
+    //
+    // Fix: toggleTraceStatePrimitive_ forces the committed entry coordinate
+    // onto hit.vertex.coordinate; canonicalizeTraceRun_ additionally heals the
+    // seam as a belt-and-braces contract.
+    let draw;
+
+    beforeEach(function () {
+      source.clear();
+      // Feature A: LineString ending at [0,0] — the trace-entry vertex.
+      source.addFeature(
+        new Feature(
+          new LineString([
+            [-40, 0],
+            [0, 0],
+          ]),
+        ),
+      );
+      // Feature B: CircularString start=[0,0], throughpoint=[20,15], end=[40,0].
+      source.addFeature(
+        new Feature(
+          new CircularString([
+            [0, 0],
+            [20, 15],
+            [40, 0],
+          ]),
+        ),
+      );
+      traceSource = new TraceSource({features: source.getFeatures()});
+      draw = new Draw({
+        source: new VectorSource(),
+        type: 'LineString',
+        trace: true,
+        traceSource: traceSource,
+      });
+      map.addInteraction(draw);
+    });
+
+    it('commits the exact vertex when entry click is off-vertex within tolerance', function () {
+      const ends = [];
+      draw.on('traceend', (e) => ends.push(e));
+
+      // Start drawing clear of all vertices.
+      simulateEvent('pointermove', 0, -30);
+      simulateEvent('pointerdown', 0, -30);
+      simulateEvent('pointerup', 0, -30);
+
+      // Enter trace with a click at map [5,5] — 7 units from vertex [0,0],
+      // inside the 12-unit vertex tolerance but NOT on the vertex.
+      simulateEvent('pointermove', 5, -5);
+      simulateEvent('pointerdown', 5, -5);
+      simulateEvent('pointerup', 5, -5);
+
+      // Move onto the arc throughpoint so the CircularString becomes active.
+      simulateEvent('pointermove', 20, -15);
+
+      // Exit the trace at end vertex [40,0].
+      simulateEvent('pointermove', 40, 0);
+      simulateEvent('pointerdown', 40, 0);
+      simulateEvent('pointerup', 40, 0);
+
+      expect(ends).to.have.length(1);
+
+      const sketchFeature = draw.getOverlay().getSource().getFeatures()[0];
+      const coords = sketchFeature.getGeometry().getCoordinates();
+      // The off-vertex entry click [5,5] must NOT survive in the geometry.
+      const hasOffVertex = coords.some((c) => c[0] === 5 && c[1] === 5);
+      expect(hasOffVertex).to.be(false);
+      // The exact graph vertex [0,0] must be present as the entry seam.
+      const hasVertex = coords.some((c) => c[0] === 0 && c[1] === 0);
+      expect(hasVertex).to.be(true);
+    });
+
+    it('commits the exact source arc triplet when the trace starts ON the feature (first draw action)', function () {
+      const ends = [];
+      draw.on('traceend', (e) => ends.push(e));
+
+      // The user's reported scenario: the FIRST drawing click lands directly
+      // on a vertex of the origin feature and immediately enters trace mode.
+      // startDrawing_ then runs AFTER tracestart, so the entry vertex is the
+      // sketch's point 0.
+      simulateEvent('pointermove', 0, 0);
+      simulateEvent('pointerdown', 0, 0);
+      simulateEvent('pointerup', 0, 0);
+
+      // Move onto the arc throughpoint so the CircularString becomes active.
+      simulateEvent('pointermove', 20, -15);
+
+      // Exit the trace at end vertex [40,0].
+      simulateEvent('pointermove', 40, 0);
+      simulateEvent('pointerdown', 40, 0);
+      simulateEvent('pointerup', 40, 0);
+
+      expect(ends).to.have.length(1);
+
+      const sketchFeature = draw.getOverlay().getSource().getFeatures()[0];
+      const coords = sketchFeature.getGeometry().getCoordinates();
+      // The committed geometry must be EXACTLY the source arc's three control
+      // points, in order — no tessellated samples, no rogue through-point.
+      const committed = coords.filter(
+        (c, i) =>
+          i === 0 || c[0] !== coords[i - 1][0] || c[1] !== coords[i - 1][1],
+      );
+      expect(committed).to.eql([
+        [0, 0],
+        [20, 15],
+        [40, 0],
+      ]);
     });
   });
 });

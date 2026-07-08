@@ -215,7 +215,7 @@ export class DrawEvent extends Event {
    * @param {DrawEventType} type Type.
    * @param {Feature} feature The feature drawn.
    * @param {import("../coordinate.js").Coordinate} [opt_coordinate] Coordinate associated with the event.
-   * @param {TraceTarget|{feature: Feature, geometry: import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default, ringIndex: (number|undefined), startIndex: (number|undefined), endIndex: (number|undefined), subGeometryKind: ('CircularString'|'LineString')}} [opt_traceTarget] Source-side trace target snapshot. When provided
+   * @param {TraceTarget|{feature: Feature, geometry: import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default, ringIndex: (number|undefined), startIndex: (number|undefined), endIndex: (number|undefined), subGeometryKind: ('CircularString'|'LineString'), arcIndex?: number, canonicalEdges?: Array<{kind: ('CircularString'|'LineString'), controlPointCount: number}>}} [opt_traceTarget] Source-side trace target snapshot. When provided
    * (typically on `traceend`), populates the `traceSource*` and `trace*Index` fields below.
    */
   constructor(type, feature, opt_coordinate, opt_traceTarget) {
@@ -325,6 +325,24 @@ export class DrawEvent extends Event {
      */
     this.traceSourceArcIndex = opt_traceTarget
       ? /** @type {{arcIndex?: number}} */ (opt_traceTarget).arcIndex
+      : undefined;
+
+    /**
+     * Ordered description of the canonical edges that were spliced into the
+     * sketch when a `TraceSource` trace ended. Each entry describes one
+     * traversed edge in traversal order: its `kind` (`'CircularString'` or
+     * `'LineString'`) and `controlPointCount` (3 for arcs, 2 for lines). The
+     * shared entry vertex of each edge is NOT counted twice; consumers can
+     * derive canonical break positions by walking these counts from the
+     * trace-entry index. Defined only on `traceend` events for a
+     * `TraceSource` primitive; undefined otherwise.
+     * @type {Array<{kind: ('CircularString'|'LineString'), controlPointCount: number}>|undefined}
+     * @api
+     */
+    this.traceSourceCanonicalEdges = opt_traceTarget
+      ? /** @type {{canonicalEdges?: Array<{kind: ('CircularString'|'LineString'), controlPointCount: number}>}} */ (
+          opt_traceTarget
+        ).canonicalEdges
       : undefined;
   }
 }
@@ -866,20 +884,10 @@ class Draw extends PointerInteraction {
     this.setTrace(options.trace || false);
 
     /**
-     * @type {TraceState & {mode?: 'traceSource', activeEdge?: import("./TraceSource.js").TraceEdge|null}}
+     * @type {TraceState & {mode?: 'traceSource', activeEdge?: import("./TraceSource.js").TraceEdge|null, entryVertex?: import("./TraceSource.js").TraceVertex, edgeStack?: Array<{edge: import("./TraceSource.js").TraceEdge, tessellation: Array<import("../coordinate.js").Coordinate>, startIndex: number, endIndex: number, pointsAdded: number}>}}
      * @private
      */
     this.traceState_ = {active: false};
-
-    /**
-     * Ordered record of all TraceSource edges committed during the current draw
-     * session. Each entry corresponds to one completed trace and contains the
-     * edges that contributed coordinates to the sketch, in traversal order.
-     * Cleared when a new sketch starts. Populated by deactivateTracePrimitive_.
-     * @private
-     * @type {Array<Array<{edge: import("./TraceSource.js").TraceEdge, pointsAdded: number}>>}
-     */
-    this.committedTraceEdges_ = [];
 
     /**
      * @type {boolean}
@@ -1212,6 +1220,24 @@ class Draw extends PointerInteraction {
       // Click is not on a graph vertex; do not start tracing.
       return;
     }
+    // Force the committed entry coordinate exactly onto the graph vertex. The
+    // click may be up to `tolerance` (~20px) off the vertex — or re-snapped by
+    // an edge/throughpoint Snap onto a non-vertex point — and `event` here is
+    // the synthetic clickEvent that flows on to addToDrawing_/startDrawing_.
+    // Without this write-back, index E of the sketch holds an off-boundary
+    // point and canonicalizeTraceRun_ (which assumes the entry vertex is
+    // already committed) builds the first canonical arc through it, producing a
+    // wild near-collinear "rogue arc" absent from the traced source. Mirrors
+    // the exit path, which already writes the vertex coordinate back before it
+    // commits.
+    event.coordinate = hit.vertex.coordinate.slice();
+    const map = this.getMap();
+    if (map) {
+      const pixel = map.getPixelFromCoordinate(hit.vertex.coordinate);
+      if (pixel) {
+        event.pixel = pixel;
+      }
+    }
     this.traceState_ = {
       active: true,
       mode: 'traceSource',
@@ -1235,15 +1261,15 @@ class Draw extends PointerInteraction {
    */
   deactivateTracePrimitive_(event) {
     const activeEdge = this.traceState_.activeEdge;
-    // Snapshot edges that contributed coords so getCanonicalCoordinates can
-    // replace tessellated arc points with exact source control points.
-    const edgeStack = this.traceState_.edgeStack || [];
-    const committed = edgeStack
-      .filter((entry) => entry.pointsAdded > 0)
-      .map((entry) => ({edge: entry.edge, pointsAdded: entry.pointsAdded}));
-    if (committed.length > 0) {
-      this.committedTraceEdges_.push(committed);
-    }
+    // Canonicalize the traced tail in place BEFORE dispatching TRACEEND, so
+    // the sketch is always canonical outside an active trace. This replaces
+    // each traced arc's tessellation with its exact [start, mid, end] triplet
+    // and each traced line edge with [start, end], using the direction and
+    // per-edge point counts still available on the edge stack. All the
+    // archaeology the old drawend-time getCanonicalCoordinates attempted
+    // (offset scanning, duplicate cleanup, per-session splicing) is thereby
+    // made unrepresentable.
+    const canonicalEdges = this.canonicalizeTraceRun_();
     this.traceState_ = {active: false};
     this.dispatchEvent(
       new DrawEvent(
@@ -1258,6 +1284,7 @@ class Draw extends PointerInteraction {
               startIndex: undefined,
               endIndex: undefined,
               subGeometryKind: activeEdge.kind,
+              canonicalEdges: canonicalEdges,
             }
           : undefined,
       ),
@@ -1265,143 +1292,105 @@ class Draw extends PointerInteraction {
   }
 
   /**
-   * Replace tessellated arc coordinates in a sketch coordinate array with the
-   * exact control points from the traced source geometries.
+   * Convert the just-completed trace session's tessellated tail into its exact
+   * canonical control points, in place. After this runs the sketch tail is
+   * canonical: each traced arc is a `[start, mid, end]` triplet and each traced
+   * line edge is `[start, end]`, with shared junction vertices appearing once.
    *
-   * During tracing, arc edges are rendered as polyline tessellations (many
-   * points). At `drawend`, calling this method converts each committed arc
-   * segment back to its canonical `[start, mid, end]` triplet using the
-   * source `CircularString`'s actual control points. `LineString` edges are
-   * passed through unchanged (their `pointsAdded` coords are correct already).
+   * The session's traced coordinates always sit contiguously at the sketch
+   * tail (each edge appended its points via {@link appendCoordinates}). The
+   * shared entry vertex of the first edge is already committed (it was the
+   * clicked trace-start vertex); every subsequent edge's entry vertex is the
+   * previous edge's exit vertex. So each edge contributes its control points
+   * EXCLUDING its entry-side vertex.
    *
-   * The method works backwards through the committed edge list so that each
-   * splice operation does not shift the offset of edges not yet processed.
+   * Direction is read from each edge-stack entry's `startIndex` (0 = entered at
+   * `startVertex`, i.e. forward; otherwise entered at `endVertex`, reversed).
+   * A reversed arc `[end, mid, start]` describes the same arc, so the splice is
+   * direction-safe.
    *
-   * @param {Array<import("../coordinate.js").Coordinate>} rawCoords Raw sketch
-   *   coordinates as produced by the draw interaction (e.g. from
-   *   `lastSketchCoordinates` or `feature.getGeometry().getCoordinates()`).
-   * @return {Array<import("../coordinate.js").Coordinate>} New coordinate array
-   *   with arc tessellations replaced by exact source control points. The input
-   *   array is not mutated.
-   * @api
+   * @return {Array<{kind: ('CircularString'|'LineString'), controlPointCount: number}>}
+   *   Ordered description of the canonical edges appended (empty when the
+   *   session added no points).
+   * @private
    */
-  getCanonicalCoordinates(rawCoords) {
-    if (!this.isTraceSourcePrimitive_() || this.committedTraceEdges_.length === 0) {
-      return rawCoords.slice();
+  canonicalizeTraceRun_() {
+    const traceSource = /** @type {import("./TraceSource.js").default} */ (
+      this.traceSource_
+    );
+    const edgeStack = this.traceState_.edgeStack || [];
+    const committed = edgeStack.filter((entry) => entry.pointsAdded > 0);
+    if (committed.length === 0) {
+      return [];
     }
-    const traceSource =
-      /** @type {import("./TraceSource.js").default} */ (this.traceSource_);
 
-    // Flatten all committed trace sessions into one ordered list of
-    // {edge, pointsAdded} entries. We need each entry's absolute offset
-    // into rawCoords, so we walk forward once to build offsets, then
-    // walk backward to splice (high→low keeps offsets stable).
-    //
-    // The sketch grows as: [freehand...] [traceEdge1pts...] [freehand...]
-    // [traceEdge2pts...] ... but we only know how many points each edge
-    // contributed, not their absolute positions. We derive offsets by
-    // scanning rawCoords: for each edge we know exactly `pointsAdded` coords
-    // were appended starting at the entry vertex. The entry vertex of the
-    // first edge in a session is the last freehand/previous-edge coord;
-    // each subsequent edge's entry is the exit vertex of the previous one.
-    //
-    // Simpler and correct: flatten the edgeStack sessions and, for each arc
-    // edge, we know start = rawCoords[offset] and end = rawCoords[offset +
-    // pointsAdded] where offset advances by pointsAdded across edges.
-    //
-    // We need the absolute start offset of the first edge across all sessions.
-    // Since sessions are contiguous (trace1 immediately follows its freehand
-    // entry, trace2 follows immediately, etc.), we can compute the total
-    // tessellation points committed by all sessions and subtract from the
-    // known end of the raw coord array (minus the freehand tail, which is 0
-    // or more points after the last trace). This is fragile.
-    //
-    // Simpler approach: the entry vertex of the very first edge in each session
-    // IS in rawCoords (it was the vertex clicked to start the trace). Walk
-    // rawCoords to find it, then march forward through edges using pointsAdded.
+    let totalPointsAdded = 0;
+    /** @type {Array<import("../coordinate.js").Coordinate>} */
+    const tail = [];
+    /** @type {Array<{kind: ('CircularString'|'LineString'), controlPointCount: number}>} */
+    const canonicalEdges = [];
+    /**
+     * The run's true entry vertex: the entry-side control point of the first
+     * committed edge, in traversal order. The sketch's committed entry
+     * coordinate MUST equal this.
+     * @type {import("../coordinate.js").Coordinate|null}
+     */
+    let entryVertex = null;
+    for (let ei = 0; ei < committed.length; ++ei) {
+      const entry = committed[ei];
+      totalPointsAdded += entry.pointsAdded;
+      const edge = entry.edge;
+      const points = traceSource.getEdgeControlPoints(edge);
+      // startIndex === 0 → entered at startVertex (forward traversal);
+      // otherwise entered at endVertex → reverse to traversal order.
+      const ordered =
+        entry.startIndex === 0 ? points : points.slice().reverse();
+      if (ei === 0 && ordered.length > 0) {
+        entryVertex = ordered[0];
+      }
+      // Skip the entry-side vertex (already present in the sketch).
+      for (let i = 1; i < ordered.length; ++i) {
+        tail.push(ordered[i].slice());
+      }
+      canonicalEdges.push({
+        kind: edge.kind,
+        controlPointCount: ordered.length,
+      });
+    }
 
-    const result = rawCoords.slice();
-    // Process all sessions in one flat reversed pass.
-    const flat = [];
-    for (const session of this.committedTraceEdges_) {
-      for (const entry of session) {
-        flat.push(entry);
+    // Replace the tessellated tail with the canonical control points. Removing
+    // the tessellated coordinates keeps the trace-entry vertex and the live
+    // cursor tip; appending the canonical tail then re-establishes the exact
+    // geometry. removeLastPoints_ aborts drawing at one remaining coordinate,
+    // but the entry vertex plus tip guarantee at least two remain.
+    this.removeLastPoints_(totalPointsAdded);
+
+    // Entry-seam contract (belt-and-braces). After removeLastPoints_ the sketch
+    // tail is [..., entryVertex, tip]; the entry vertex sits at index
+    // length - 2. It MUST be the exact graph vertex. If it diverges — an
+    // unforced entry click, or getNearestVertex having grabbed a vertex of a
+    // disconnected feature within tolerance — overwrite it here rather than
+    // building the first canonical edge through an off-boundary point. This
+    // converts the "rogue arc" failure mode into a self-healing path.
+    if (entryVertex) {
+      const seamCoords =
+        this.mode_ === 'Polygon'
+          ? /** @type {PolyCoordType} */ (this.sketchCoords_)[0]
+          : /** @type {LineCoordType} */ (this.sketchCoords_);
+      if (seamCoords && seamCoords.length >= 2) {
+        const seam = seamCoords[seamCoords.length - 2];
+        const dx = seam[0] - entryVertex[0];
+        const dy = seam[1] - entryVertex[1];
+        if (dx * dx + dy * dy > 1e-12) {
+          seamCoords[seamCoords.length - 2] = entryVertex.slice();
+        }
       }
     }
 
-    // Compute absolute offsets for each edge by walking rawCoords forward.
-    // The entry vertex of the first edge in the very first session must exist
-    // in rawCoords; we find it by matching startVertex.coordinate.
-    if (flat.length === 0) {
-      return result;
+    if (tail.length > 0) {
+      this.appendCoordinates(tail);
     }
-
-    // Find the start of the first committed edge in rawCoords by scanning
-    // for its startVertex coordinate.
-    const firstEdge = flat[0].edge;
-    const firstEntryCoord = firstEdge.startVertex.coordinate;
-    let offset = -1;
-    for (let i = 0; i < result.length; i++) {
-      const c = result[i];
-      if (
-        Math.abs(c[0] - firstEntryCoord[0]) < 1e-9 &&
-        Math.abs(c[1] - firstEntryCoord[1]) < 1e-9
-      ) {
-        offset = i;
-        break;
-      }
-    }
-    if (offset === -1) {
-      // Entry vertex not found — return unchanged (safety fallback).
-      return result;
-    }
-
-    // Compute the absolute [startOffset, endOffset] for each edge.
-    /** @type {Array<{edge: import("./TraceSource.js").TraceEdge, startOff: number, endOff: number}>} */
-    const resolved = [];
-    let cur = offset;
-    for (const {edge, pointsAdded} of flat) {
-      resolved.push({edge, startOff: cur, endOff: cur + pointsAdded});
-      cur += pointsAdded;
-    }
-
-    // Splice arc edges back-to-front (so earlier offsets stay valid).
-    for (let i = resolved.length - 1; i >= 0; i--) {
-      const {edge, startOff, endOff} = resolved[i];
-      if (edge.kind !== 'CircularString') {
-        continue;
-      }
-      const ctrlPts = traceSource.getEdgeControlPoints(edge);
-      // ctrlPts = [start, mid, end].  start and end are already in result at
-      // startOff and endOff (placed there by appendCoordinates / Snap);
-      // only the single mid throughpoint needs to replace the interior
-      // tessellation points.
-      // Interior positions: startOff+1 .. endOff-1  →  interiorCount items.
-      // Using interiorCount-1 (the previous value) left one tessellation point
-      // at endOff-1, producing a spurious 2-pt LineString segment.
-      const interiorCount = endOff - startOff - 1;
-      if (interiorCount <= 0) {
-        continue;
-      }
-      result.splice(startOff + 1, interiorCount, ctrlPts[1]);
-
-      // appendCoordinates (trace walk) places the arc endpoint at the last
-      // tessellation position (raw[endOff]).  The vertex-only-exit handler
-      // then calls addToDrawing_ which pushes the same vertex a second time
-      // (raw[endOff+1]).  After the interior splice those two copies end up
-      // adjacent at result[startOff+2] and result[startOff+3].  Remove the
-      // extra copy so the post-trace user segment starts cleanly.
-      const newEnd = startOff + 2;
-      if (
-        newEnd + 1 < result.length &&
-        result[newEnd][0] === result[newEnd + 1][0] &&
-        result[newEnd][1] === result[newEnd + 1][1]
-      ) {
-        result.splice(newEnd + 1, 1);
-      }
-    }
-
-    return result;
+    return canonicalEdges;
   }
 
   /**
@@ -2067,9 +2056,7 @@ class Draw extends PointerInteraction {
                   const dex = clickEvent.coordinate[0] - ev.coordinate[0];
                   const dey = clickEvent.coordinate[1] - ev.coordinate[1];
                   const nearest =
-                    dsx * dsx + dsy * dsy <= dex * dex + dey * dey
-                      ? sv
-                      : ev;
+                    dsx * dsx + dsy * dsy <= dex * dex + dey * dey ? sv : ev;
                   const stack = this.traceState_.edgeStack;
                   const top =
                     stack && stack.length > 0 ? stack[stack.length - 1] : null;
@@ -2109,7 +2096,13 @@ class Draw extends PointerInteraction {
             if (this.finishCondition_(clickEvent)) {
               this.finishDrawing();
             }
-          } else {
+          } else if (!(this.isTraceSourcePrimitive_() && tracing)) {
+            // A click that occurred while a `TraceSource` trace was active is
+            // never a free draw point: on a valid vertex exit the exit vertex
+            // is already committed by canonicalizeTraceRun_, and an off-vertex
+            // click is rejected outright (vertex-only exit). In both cases,
+            // swallow the click rather than injecting an off-boundary point
+            // into the middle of the traced run.
             this.addToDrawing_(clickEvent.coordinate);
           }
         }
@@ -2263,7 +2256,6 @@ class Draw extends PointerInteraction {
   startDrawing_(start) {
     const projection = this.getMap().getView().getProjection();
     const stride = getStrideForLayout(this.geometryLayout_);
-    this.committedTraceEdges_ = [];
     while (start.length < stride) {
       start.push(0);
     }

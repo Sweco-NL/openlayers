@@ -11,8 +11,9 @@ import CompoundCurve, {
 import CurvePolygon from '../src/ol/geom/CurvePolygon.js';
 import LineString from '../src/ol/geom/LineString.js';
 import Point from '../src/ol/geom/Point.js';
-import {getSegmentsCrossingPoint} from '../src/ol/geom/flat/segments.js';
 import {
+  arcsAreEqual,
+  getArcArcCrossingPoints,
   getArcArrayCrossings,
   getSelfIntersectionPoint,
 } from '../src/ol/geom/flat/topology.js';
@@ -53,6 +54,12 @@ const validationState = {
   errorSegment: null,
 };
 
+/**
+ * Overlay source for crossing-point red dot markers. Declared before
+ * setTopoStatus so calls from resetSketchState (early init) don't throw.
+ */
+const crossingOverlaySource = new VectorSource();
+
 function setTopoStatus(valid, reason) {
   validationState.isValid = valid;
   if (valid) {
@@ -63,6 +70,10 @@ function setTopoStatus(valid, reason) {
   } else {
     topoStatusEl.textContent = '\u2717 ' + reason;
     topoStatusEl.style.background = '#dc3545';
+  }
+  crossingOverlaySource.clear();
+  for (const cp of validationState.crossingPoints) {
+    crossingOverlaySource.addFeature(new Feature({geometry: new Point(cp)}));
   }
 }
 
@@ -96,6 +107,14 @@ let startCoord = null;
 const userPlacedIndices = new Set();
 /** Entry index of the currently active trace (-1 when none). */
 let activeTraceEntryIdx = -1;
+/**
+ * Index ranges [start, end] into `lastSketchCoordinates` that were produced by
+ * a canonicalized trace run (inclusive). Only coordinates in these ranges are
+ * subject to the canonical-contract tripwire — free / edge-snapped coordinates
+ * legitimately lie on a source boundary without being control points.
+ * @type {Array<{start: number, end: number}>}
+ */
+let tracedIndexRanges = [];
 /** Single-feature source holding the active draw's start vertex for snap-to-close. */
 const sketchSnapSource = new VectorSource();
 
@@ -124,6 +143,7 @@ function resetSketchState() {
   startCoord = null;
   userPlacedIndices.clear();
   activeTraceEntryIdx = -1;
+  tracedIndexRanges = [];
   traceExcludedFeatures = new Set();
   traceBoundaryRings = [];
   currentTraceFeature = null;
@@ -156,6 +176,50 @@ function collectCurveSegments(geom) {
     result.push([bx, by, mx, my, ex, ey]);
   });
   return result;
+}
+
+/**
+ * Self-intersection points of a single feature's arc segments, using the exact
+ * arc engine. Mirrors `CurvePolygon#getSelfIntersections` but works for ANY
+ * curve geometry (CircularString / CompoundCurve / CurvePolygon) from its
+ * collected [bx, by, mx, my, ex, ey] arc list — self-intersection was
+ * previously only detected for CurvePolygon, so a self-crossing open curve
+ * showed no markers. Adjacent arcs share an endpoint by construction;
+ * `getArcArcCrossingPoints` filters near-shared-endpoint candidates, so only
+ * genuine "loops back and crosses" intersections remain.
+ * @param {Array<Array<number>>} arcs Arc segments.
+ * @return {Array<Array<number>>} Self-intersection points (possibly empty).
+ */
+function getArcSelfIntersections(arcs) {
+  const out = [];
+  for (let i = 0, ii = arcs.length; i < ii; i++) {
+    const a = arcs[i];
+    for (let j = i + 1; j < ii; j++) {
+      const b = arcs[j];
+      if (arcsAreEqual(a, b, SAME_ARC_TOLERANCE_SQ)) {
+        continue;
+      }
+      const pts = getArcArcCrossingPoints(
+        a[0],
+        a[1],
+        a[2],
+        a[3],
+        a[4],
+        a[5],
+        b[0],
+        b[1],
+        b[2],
+        b[3],
+        b[4],
+        b[5],
+        CROSSING_EPSILON_SQ,
+      );
+      for (let k = 0, kk = pts.length; k < kk; k++) {
+        out.push(pts[k]);
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -260,19 +324,36 @@ function isNearSegmentEndpoint(point, ax, ay, bx, by) {
 }
 
 /**
- * First proper-interior crossing between two flat polylines (no near-endpoint
- * touches). Tessellation can place a shared vertex a few ULPs inside a segment;
- * filter those out so trace-hugging does not produce false "edges cross".
- * @param {Array<number>} flat1 First flat.
- * @param {number} off1 Offset 1.
- * @param {number} end1 End 1.
- * @param {Array<number>} flat2 Second flat.
- * @param {number} off2 Offset 2.
- * @param {number} end2 End 2.
+ * The single flat-polyline crossing predicate for the whole example. Calls
+ * `callback` with each proper-interior crossing point between two flat
+ * polylines and stops early if the callback returns a truthy value.
+ *
+ * "Proper interior" means both parameters are strictly inside their segments
+ * (0 < t,u < 1) AND the crossing point is not within `CROSSING_EPSILON_SQ` of
+ * any of the four segment endpoints. This epsilon filter is deliberate and
+ * central to the demo's design:
+ *   - Tessellation can place a shared vertex a few ULPs inside a neighbouring
+ *     segment; without the filter that registers as a false "edges cross".
+ *   - Trace-hugging INTENTIONALLY makes a new feature share boundary vertices
+ *     (and whole collinear edges) with the traced source. Endpoint-touches and
+ *     collinear overlaps are therefore NOT crossings here — reporting them
+ *     (the classic "vertex-through" / "collinear overlap" cases) would flag
+ *     every legitimately-hugged boundary. Shared boundaries are the feature,
+ *     not a bug.
+ * `denom === 0` (parallel/collinear) is skipped for the same reason.
+ *
+ * @param {Array<number>} flat1 First flat coordinates.
+ * @param {number} off1 Offset into flat1.
+ * @param {number} end1 End index in flat1.
+ * @param {Array<number>} flat2 Second flat coordinates.
+ * @param {number} off2 Offset into flat2.
+ * @param {number} end2 End index in flat2.
  * @param {number} stride Stride.
- * @return {Array<number>|undefined} Proper crossing point or undefined.
+ * @param {function(Array<number>): *} callback Called per crossing; return
+ *     truthy to stop.
+ * @return {*} The callback's truthy value, or false.
  */
-function getInteriorSegmentsCrossingPoint(
+function forEachInteriorSegmentsCrossing(
   flat1,
   off1,
   end1,
@@ -280,6 +361,7 @@ function getInteriorSegmentsCrossingPoint(
   off2,
   end2,
   stride,
+  callback,
 ) {
   for (let i = off1 + stride; i < end1; i += stride) {
     const ax = flat1[i - stride];
@@ -307,10 +389,89 @@ function getInteriorSegmentsCrossingPoint(
       ) {
         continue;
       }
-      return point;
+      const ret = callback(point);
+      if (ret) {
+        return ret;
+      }
     }
   }
-  return undefined;
+  return false;
+}
+
+/**
+ * First proper-interior crossing between two flat polylines (no near-endpoint
+ * touches). See {@link forEachInteriorSegmentsCrossing} for the epsilon policy.
+ * @param {Array<number>} flat1 First flat.
+ * @param {number} off1 Offset 1.
+ * @param {number} end1 End 1.
+ * @param {Array<number>} flat2 Second flat.
+ * @param {number} off2 Offset 2.
+ * @param {number} end2 End 2.
+ * @param {number} stride Stride.
+ * @return {Array<number>|undefined} Proper crossing point or undefined.
+ */
+function getInteriorSegmentsCrossingPoint(
+  flat1,
+  off1,
+  end1,
+  flat2,
+  off2,
+  end2,
+  stride,
+) {
+  let found;
+  forEachInteriorSegmentsCrossing(
+    flat1,
+    off1,
+    end1,
+    flat2,
+    off2,
+    end2,
+    stride,
+    (point) => {
+      found = point;
+      return true;
+    },
+  );
+  return found;
+}
+
+/**
+ * All proper-interior crossings between two flat polylines (no near-endpoint
+ * touches). See {@link forEachInteriorSegmentsCrossing} for the epsilon policy.
+ * @param {Array<number>} flat1 First flat.
+ * @param {number} off1 Offset 1.
+ * @param {number} end1 End 1.
+ * @param {Array<number>} flat2 Second flat.
+ * @param {number} off2 Offset 2.
+ * @param {number} end2 End 2.
+ * @param {number} stride Stride.
+ * @return {Array<Array<number>>} All proper crossing points (possibly empty).
+ */
+function getInteriorSegmentsCrossingPoints(
+  flat1,
+  off1,
+  end1,
+  flat2,
+  off2,
+  end2,
+  stride,
+) {
+  const out = [];
+  forEachInteriorSegmentsCrossing(
+    flat1,
+    off1,
+    end1,
+    flat2,
+    off2,
+    end2,
+    stride,
+    (point) => {
+      out.push(point);
+      return false;
+    },
+  );
+  return out;
 }
 
 /**
@@ -355,20 +516,29 @@ function pointToPolylineDist2(mx, my, flat, end) {
 /**
  * Check overlap between sketch and existing features: edge crossings AND
  * (for CurvePolygon mode) interior containment of sketch segment midpoints.
+ * Collects EVERY crossing point (not just the first) so a traced sketch that
+ * clips several existing features — or one feature at multiple points — shows a
+ * balloon for each intersection rather than a single dot.
  * @param {Array<number>} sketchCoords Tessellated sketch coords.
  * @param {number} sketchEnd End of sketch coords.
+ * @param {Array<Array<number>>} sketchSegments Sketch curve segments [b,m,e].
  * @param {Array<import('../src/ol/Feature.js').default>} features Source features.
  * @param {Set<import('../src/ol/Feature.js').default>} excludedFromContainment Features whose boundary the sketch shares.
  * @param {boolean} skipContainment Skip containment check.
- * @return {{reason: string, point: Array<number>}|null} Overlap descriptor or null.
+ * @return {{reason: string, points: Array<Array<number>>}|null} Overlap descriptor or null.
  */
 function checkOverlapWithExisting(
   sketchCoords,
   sketchEnd,
+  sketchSegments,
   features,
   excludedFromContainment,
   skipContainment,
 ) {
+  /** @type {Array<Array<number>>} */
+  const crossingPoints = [];
+  /** @type {Array<Array<number>>} */
+  const containedPoints = [];
   for (const feat of features) {
     if (feat.get('_snapPoint')) {
       continue;
@@ -381,20 +551,43 @@ function checkOverlapWithExisting(
     if (!existing) {
       continue;
     }
-    const crossing = getInteriorSegmentsCrossingPoint(
-      sketchCoords,
-      0,
-      sketchEnd,
-      existing.coords,
-      0,
-      existing.ends[0],
-      2,
-    );
-    if (crossing) {
-      return {
-        reason: 'Overlaps existing feature (edges cross)',
-        point: crossing,
-      };
+    // Crossing check. Prefer the arc-aware primitive: when both sketch and
+    // source expose curve segments, compare their [b,m,e] triplets with
+    // getArcArrayCrossings, whose same-arc skip (arcsAreEqual, reversal-aware)
+    // recognises a trace-hugged boundary — even a reverse-traced arc whose
+    // canonical triplet is [end,mid,start] — as SHARED, not crossing. The
+    // tessellation predicate cannot: two samplings of the same arc anchored at
+    // opposite ends interleave and read as many spurious mid-segment crossings
+    // (the "false positive at trace exit" symptom). Tessellation is used only
+    // as a fallback for non-curve sources (plain Polygon / LineString), whose
+    // straight edges tessellate identically and never produce that artefact.
+    // Both primitives return ALL crossings; collect them so every intersection
+    // gets its own balloon.
+    const sourceSegments = collectCurveSegments(existingGeom);
+    if (sketchSegments.length > 0 && sourceSegments.length > 0) {
+      const arcCrossings = getArcArrayCrossings(
+        sketchSegments,
+        sourceSegments,
+        CROSSING_EPSILON_SQ,
+        true,
+        SAME_ARC_TOLERANCE_SQ,
+      );
+      for (const p of arcCrossings) {
+        crossingPoints.push(p);
+      }
+    } else {
+      const pts = getInteriorSegmentsCrossingPoints(
+        sketchCoords,
+        0,
+        sketchEnd,
+        existing.coords,
+        0,
+        existing.ends[existing.ends.length - 1],
+        2,
+      );
+      for (const p of pts) {
+        crossingPoints.push(p);
+      }
     }
     if (
       !skipContainment &&
@@ -405,7 +598,7 @@ function checkOverlapWithExisting(
       const span = Math.max(ext[2] - ext[0], ext[3] - ext[1]);
       const onBoundaryTol2 = Math.pow(span * 1e-4, 2);
       const ec = existing.coords;
-      const eend = existing.ends[0];
+      const eend = existing.ends[existing.ends.length - 1];
       for (let ti = 0; ti < sketchEnd - 2; ti += 2) {
         const mx = (sketchCoords[ti] + sketchCoords[ti + 2]) / 2;
         const my = (sketchCoords[ti + 1] + sketchCoords[ti + 3]) / 2;
@@ -413,13 +606,24 @@ function checkOverlapWithExisting(
           continue;
         }
         if (existingGeom.containsXY(mx, my)) {
-          return {
-            reason: 'Overlaps existing feature (contained)',
-            point: [mx, my],
-          };
+          // One representative point per contained feature is enough.
+          containedPoints.push([mx, my]);
+          break;
         }
       }
     }
+  }
+  if (crossingPoints.length > 0) {
+    return {
+      reason: 'Overlaps existing feature (edges cross)',
+      points: crossingPoints,
+    };
+  }
+  if (containedPoints.length > 0) {
+    return {
+      reason: 'Overlaps existing feature (contained)',
+      points: containedPoints,
+    };
   }
   return null;
 }
@@ -526,34 +730,103 @@ function buildFinalGeometry(coords, breaks, mode) {
   return new CurvePolygon([ring]);
 }
 
+/**
+ * Enforce the exact-shared-geometry contract at commit time. A canonicalized
+ * trace run must consist entirely of exact source control points (graph
+ * vertices or arc throughpoints). This tripwire checks ONLY the coordinates
+ * inside known traced index ranges — free and edge-snapped coordinates
+ * legitimately lie on a source boundary without being control points, so
+ * checking every coordinate (as an earlier version did) produced false
+ * positives under `edge: true` snapping. Comparison is exact (a tiny absolute
+ * epsilon for float drift), not resolution-scaled: a canonical coordinate is
+ * copied verbatim from the source, so anything but an exact match means a
+ * tessellated arc sample leaked in.
+ * @param {Array<import('../src/ol/coordinate.js').Coordinate>} coords Finished
+ *     feature coordinates.
+ * @param {Array<{start: number, end: number}>} ranges Traced index ranges.
+ * @return {string|null} Violation description, or null.
+ */
+function findCanonicalContractViolation(coords, ranges) {
+  if (traceExcludedFeatures.size === 0 || ranges.length === 0) {
+    return null;
+  }
+  /** @type {Array<import('../src/ol/coordinate.js').Coordinate>} */
+  const allowed = [];
+  for (const feat of traceExcludedFeatures) {
+    const geom = feat.getGeometry();
+    if (!geom) {
+      continue;
+    }
+    for (const cp of getControlPoints(geom)) {
+      allowed.push(cp.coord);
+    }
+  }
+  const tol2 = 1e-6; // exact match modulo float drift
+  for (const {start, end} of ranges) {
+    for (let idx = start; idx <= end && idx < coords.length; idx++) {
+      const c = coords[idx];
+      let matched = false;
+      for (const a of allowed) {
+        const dx = c[0] - a[0];
+        const dy = c[1] - a[1];
+        if (dx * dx + dy * dy < tol2) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
+        return (
+          `traced coordinate #${idx} [${c[0].toFixed(1)}, ${c[1].toFixed(1)}] ` +
+          `matches no source control point (a tessellated arc sample was ` +
+          `committed as canonical)`
+        );
+      }
+    }
+  }
+  return null;
+}
+
 // ── Multi-feature topology validation ────────────────────────
 
 /**
- * Validate one or more features for self-intersection and pair-wise crossings
- * against every feature in the source. Updates `validationState`.
- * @param {Array<import('../src/ol/Feature.js').default>} targets Features under test.
- * @return {boolean} True when no crossings found.
+ * Validate the ENTIRE scene for self-intersections and pair-wise crossings and
+ * render a red dot at every crossing point. Updates `validationState`.
+ *
+ * This is deliberately global (every feature, not just the one being edited).
+ * `setTopoStatus` rebuilds `crossingOverlaySource` from scratch on every call,
+ * so validating only the edited feature would erase the markers belonging to
+ * every OTHER crossing pair in the scene. That was the cause of "some
+ * validation errors disappear during a modify": editing feature A wiped the
+ * red dots for an existing B×C crossing because B and C were never revisited.
+ * @return {boolean} True when the scene has no crossings.
  */
-function validateFeatures(targets) {
+function validateFeatures() {
   const allFeatures = source.getFeatures().filter((f) => !f.get('_snapPoint'));
-  const targetSet = new Set(targets);
   /** @type {Array<Array<number>>} */
   const allCrossings = [];
+  // NOTE: `Map` is imported from ol/Map.js in this example, so `new Map()`
+  // would create an ol Map whose BaseObject#set stringifies its key — every
+  // Feature collapses to "[object Object]" and all lookups return the last
+  // feature's arcs. Use the native Map (via `window.Map`) for a real keyed map.
   /** @type {Map<import('../src/ol/Feature.js').default, Array<Array<number>>>} */
-  const arcsByFeature = new Map();
+  const arcsByFeature = new window.Map();
   let hasSelfIntersection = false;
 
+  // Arc segments + self-intersections for every feature in the scene.
   for (const f of allFeatures) {
     const g = f.getGeometry();
     if (!g) {
       continue;
     }
-    arcsByFeature.set(f, collectCurveSegments(g));
-    if (targetSet.has(f) && g.getType() === 'CurvePolygon') {
-      const selfX = g.getSelfIntersections(
-        CROSSING_EPSILON_SQ,
-        SAME_ARC_TOLERANCE_SQ,
-      );
+    // Arc segments for every curve geometry (empty for plain Polygon /
+    // LineString, which fall back to tessellation for pair-wise checks).
+    const arcs = collectCurveSegments(g);
+    arcsByFeature.set(f, arcs);
+    // Self-intersection for ANY curve type — not just CurvePolygon. Open
+    // curves (CircularString / CompoundCurve) can loop across themselves too;
+    // gating this on CurvePolygon is why self-crossing lines showed no marker.
+    if (arcs.length > 0) {
+      const selfX = getArcSelfIntersections(arcs);
       if (selfX.length > 0) {
         hasSelfIntersection = true;
         allCrossings.push(...selfX);
@@ -561,54 +834,66 @@ function validateFeatures(targets) {
     }
   }
 
-  // Check each target against every other feature exactly once.
-  for (const target of targets) {
-    const tg = target.getGeometry();
-    if (!tg) {
+  // Check every unordered pair of features exactly once.
+  for (let i = 0, ii = allFeatures.length; i < ii; i++) {
+    const fa = allFeatures[i];
+    const ga = fa.getGeometry();
+    if (!ga) {
       continue;
     }
-    const targetArcs = arcsByFeature.get(target);
-    for (const other of allFeatures) {
-      if (other === target) {
+    for (let j = i + 1; j < ii; j++) {
+      const fb = allFeatures[j];
+      const gb = fb.getGeometry();
+      if (!gb) {
         continue;
       }
-      // Skip target-target pairs we've already checked.
-      if (
-        targetSet.has(other) &&
-        targets.indexOf(other) < targets.indexOf(target)
-      ) {
-        continue;
-      }
-      const og = other.getGeometry();
-      if (!og) {
-        continue;
-      }
-      if (tg.getType() === 'CurvePolygon' && og.getType() === 'CurvePolygon') {
+      // Exact arc-vs-arc whenever BOTH features expose curve segments (covers
+      // every CurvePolygon / CircularString / CompoundCurve combination, not
+      // just CurvePolygon-vs-CurvePolygon). Tessellation is used only when one
+      // side is a plain geometry with no arcs. The same-arc skip keeps
+      // trace-hugged shared boundaries from reading as crossings.
+      const arcsA = arcsByFeature.get(fa);
+      const arcsB = arcsByFeature.get(fb);
+      if (arcsA.length > 0 && arcsB.length > 0) {
         const cross = getArcArrayCrossings(
-          targetArcs,
-          arcsByFeature.get(other),
+          arcsA,
+          arcsB,
           CROSSING_EPSILON_SQ,
           true,
           SAME_ARC_TOLERANCE_SQ,
         );
         allCrossings.push(...cross);
       } else {
-        const a = getTessellatedFlatCoords(tg);
-        const b = getTessellatedFlatCoords(og);
+        const a = getTessellatedFlatCoords(ga);
+        const b = getTessellatedFlatCoords(gb);
         if (!a || !b) {
           continue;
         }
-        const c = getSegmentsCrossingPoint(
-          a.coords,
-          0,
-          a.ends[0],
-          b.coords,
-          0,
-          b.ends[0],
-          2,
-        );
-        if (c) {
-          allCrossings.push(c);
+        // Iterate each part (ring) of both geometries separately. Feeding a
+        // single 0..lastEnd span for a multi-ring geometry stitches the last
+        // vertex of one ring to the first of the next, inventing a phantom
+        // segment that can register bogus crossings. Per-part bounds prevent
+        // that. Uses the one epsilon-filtered predicate the whole example
+        // shares, so trace-hugged shared boundaries never read as crossings.
+        let aStart = 0;
+        for (let ai = 0; ai < a.ends.length; ai++) {
+          const aEnd = a.ends[ai];
+          let bStart = 0;
+          for (let bi = 0; bi < b.ends.length; bi++) {
+            const bEnd = b.ends[bi];
+            const crosses = getInteriorSegmentsCrossingPoints(
+              a.coords,
+              aStart,
+              aEnd,
+              b.coords,
+              bStart,
+              bEnd,
+              2,
+            );
+            allCrossings.push(...crosses);
+            bStart = bEnd;
+          }
+          aStart = aEnd;
         }
       }
     }
@@ -676,16 +961,17 @@ function validateSketchTopology(geometry, checkOverlap) {
       const overlap = checkOverlapWithExisting(
         data.coords,
         totalEnd,
+        collectCurveSegments(geometry),
         others,
         traceExcludedFeatures,
         mode !== 'CurvePolygon',
       );
       if (overlap) {
-        validationState.crossingPoints = [overlap.point];
+        validationState.crossingPoints = overlap.points;
         validationState.errorSegment = findSketchSubGeomNear(
           data.coords,
           data.ends,
-          overlap.point,
+          overlap.points[0],
         );
         setTopoStatus(false, overlap.reason);
         return;
@@ -696,6 +982,11 @@ function validateSketchTopology(geometry, checkOverlap) {
     validationState.errorSegment = null;
     setTopoStatus(true, '');
   } catch (err) {
+    // Surface the failure loudly (full error + stack) instead of silently
+    // collapsing every exception into a terse status line — a swallowed
+    // validation bug would otherwise look identical to a genuine crossing.
+    // eslint-disable-next-line no-console
+    console.error('[validateSketchTopology] threw:', err);
     setTopoStatus(false, 'Validation error: ' + err.message);
   }
 }
@@ -733,21 +1024,30 @@ function checkCrossingCondition(event) {
       continue;
     }
     if (
-      isVertexInFlat(lastPt, existing.coords, existing.ends[0]) &&
-      isVertexInFlat(candidate, existing.coords, existing.ends[0])
+      isVertexInFlat(
+        lastPt,
+        existing.coords,
+        existing.ends[existing.ends.length - 1],
+      ) &&
+      isVertexInFlat(
+        candidate,
+        existing.coords,
+        existing.ends[existing.ends.length - 1],
+      )
     ) {
       continue;
     }
-    const crossing = getSegmentsCrossingPoint(
+    const crossing = getInteriorSegmentsCrossingPoint(
       newSeg,
       0,
       4,
       existing.coords,
       0,
-      existing.ends[0],
+      existing.ends[existing.ends.length - 1],
       2,
     );
     if (crossing) {
+      validationState.crossingPoints = [crossing];
       setTopoStatus(false, 'Crosses existing feature');
       return true; // advisory — don't block
     }
@@ -760,7 +1060,7 @@ function checkCrossingCondition(event) {
     }
     const checkEnd = sketchFlat.length - 2;
     if (checkEnd >= 4) {
-      const crossing = getSegmentsCrossingPoint(
+      const crossing = getInteriorSegmentsCrossingPoint(
         newSeg,
         0,
         4,
@@ -770,6 +1070,7 @@ function checkCrossingCondition(event) {
         2,
       );
       if (crossing) {
+        validationState.crossingPoints = [crossing];
         setTopoStatus(false, 'Self-intersecting');
         return true; // advisory — don't block
       }
@@ -792,19 +1093,6 @@ function featureStyle(feature) {
       fill: new Fill({color: 'rgba(0, 100, 200, 0.12)'}),
     }),
   ];
-  // Crossing markers (red dots at intersections during drag).
-  for (const cp of validationState.crossingPoints) {
-    styles.push(
-      new Style({
-        geometry: new Point(cp),
-        image: new CircleStyle({
-          radius: 10,
-          fill: new Fill({color: 'rgba(220, 53, 69, 0.4)'}),
-          stroke: new Stroke({color: '#dc3545', width: 3}),
-        }),
-      }),
-    );
-  }
   return styles;
 }
 
@@ -1039,6 +1327,16 @@ const map = new Map({
     new TileLayer({source: new OSM()}),
     new VectorLayer({source, style: featureStyle}),
     new VectorLayer({source: controlPointSource, style: controlPointStyle}),
+    new VectorLayer({
+      source: crossingOverlaySource,
+      style: new Style({
+        image: new CircleStyle({
+          radius: 10,
+          fill: new Fill({color: 'rgba(220, 53, 69, 0.4)'}),
+          stroke: new Stroke({color: '#dc3545', width: 3}),
+        }),
+      }),
+    }),
   ],
   target: 'map',
   view: new View({center: [0, 0], zoom: 4}),
@@ -1100,36 +1398,28 @@ modify.on('modifystart', (event) => {
     modifyStartSnapshots.set(f, f.getGeometry().clone());
   });
 
-  // Live crossing feedback: validate on every geometry change during drag.
-  // Debounce so that co-grabbed vertices (multiple change events per frame)
-  // only trigger one validation pass per animation frame.
+  // Live crossing feedback: validate synchronously on every geometry change
+  // so that crossingOverlaySource is updated before OL's already-scheduled
+  // render fires. Using rAF here meant OL rendered first (from its own
+  // feature.changed() → map.scheduleRender() chain) then our rAF updated the
+  // overlay source — but with no subsequent render scheduled, the dot never
+  // appeared. Synchronous validation ensures the overlay source is populated
+  // at render time.
   modifyTargetFeatures = new Set(
     event.features.getArray().filter((f) => !f.get('_snapPoint')),
   );
-  let validationScheduled = false;
   modifyChangeKeys = [];
   for (const f of modifyTargetFeatures) {
     const key = f.on('change', () => {
-      if (!validationScheduled) {
-        validationScheduled = true;
-        requestAnimationFrame(() => {
-          validationScheduled = false;
-          // modifyActive may have been set to false by modifyend before this
-          // rAF fires. Guard so we never overwrite validationState after the
-          // modify session has ended — that would corrupt the isValid flag and
-          // cause finishCondition to block the next draw.
-          if (modifyActive) {
-            validateFeatures([...modifyTargetFeatures]);
-            source.changed();
-          }
-        });
+      if (modifyActive) {
+        validateFeatures();
       }
     });
     modifyChangeKeys.push(key);
   }
 });
 
-modify.on('modifyend', (event) => {
+modify.on('modifyend', () => {
   modifyActive = false;
   // Remove live-validation listeners.
   modifyChangeKeys.forEach(unByKey);
@@ -1138,21 +1428,11 @@ modify.on('modifyend', (event) => {
   // Invalidate the TraceSource graph so it reflects the updated vertex
   // positions (e.g. when Modify connects two features at a shared node).
   traceSource.invalidate();
-  const featuresToCheck = event.features
-    .getArray()
-    .filter((f) => !f.get('_snapPoint'));
-  if (!validateFeatures(featuresToCheck)) {
-    for (const f of featuresToCheck) {
-      const snap = modifyStartSnapshots.get(f);
-      if (snap) {
-        f.setGeometry(snap);
-      }
-    }
-    setTopoStatus(true, '');
-    status('Edit reverted: would create a topological invalid feature.');
-  } else {
-    setTopoStatus(true, '');
+  validateFeatures();
+  if (validationState.isValid) {
     status('Edit accepted.');
+  } else {
+    status('Edit creates crossing — shown in red. Undo to revert.');
   }
   modifyStartSnapshots.clear();
   rebuildControlPointSource();
@@ -1161,97 +1441,71 @@ modify.on('modifyend', (event) => {
 // ── Draw interaction wiring ──────────────────────────────────
 
 function wireTraceLifecycle(drawInteraction) {
-  let traceStartIdx = -1;
+  // Index of the trace-entry vertex in the sketch. Stable across the trace:
+  // canonicalization at traceend removes/appends only coordinates AFTER this
+  // index, so it never shifts.
+  let traceEntryIdx = -1;
   drawInteraction.on('tracestart', () => {
     traceActive = true;
     currentTraceFeature = null;
-    // Anchor the trace-entry split point at the index where the just-clicked
-    // trace-anchor coordinate will land. Tracestart fires INSIDE
-    // `toggleTraceState_`, which runs BEFORE the click's `addToDrawing_`
-    // pushes the clicked coordinate, so the anchor is at
-    // `length - 1` (the current tip slot, which the click commit shifts
-    // into a real committed coord and re-tips). Off-by-one (using
-    // `length - 2`, the previous committed index) leaves the trace-entry
-    // break unstamped, which fed every traced coord plus the pre-trace
-    // freehand history into ONE CircularString — visibly bending the
-    // already-drawn "starting line" into the trace arc.
-    traceStartIdx = Math.max(0, lastSketchCoordinates.length - 1);
-    activeTraceEntryIdx = traceStartIdx;
-    // Record the trace-entry vertex as user-placed so its dot is shown.
-    // tracestart fires BEFORE addToDrawing_ commits the click, but the entry
-    // coord ends up at exactly this index (the current tip slot).
+    // tracestart fires INSIDE the exit/entry click handling, BEFORE the
+    // entry-click's addToDrawing_ commits the clicked vertex. That vertex
+    // lands at exactly the current tip slot (length - 1).
+    traceEntryIdx = Math.max(0, lastSketchCoordinates.length - 1);
+    activeTraceEntryIdx = traceEntryIdx;
     userPlacedIndices.add(activeTraceEntryIdx);
     status('Tracing along boundary — click a vertex to exit.');
   });
 
   drawInteraction.on('trace', (e) => {
+    // Accumulate every feature whose boundary this trace touches (a single
+    // trace may junction-hop across features A→B→…). Doing this from the
+    // continuous `trace` event — not only at traceend — keeps every hugged
+    // feature excluded from containment/crossing checks.
     if (e.traceSourceFeature) {
       currentTraceFeature = e.traceSourceFeature;
+      traceExcludedFeatures.add(e.traceSourceFeature);
     }
-    if (lastSketchCoordinates.length < 2) {
+    if (
+      e.traceSourceGeometry &&
+      !traceBoundaryRings.includes(e.traceSourceGeometry)
+    ) {
+      traceBoundaryRings.push(e.traceSourceGeometry);
+    }
+    // Live preview: while tracing, the sketch tail is a tessellated polyline
+    // (the walk keeps its current mechanics; only the exit converts to
+    // canonical control points). Render the whole traced run as a single
+    // LineString by ensuring ONE 'line' break at the entry vertex. This
+    // splits the traced polyline from the pre-trace free segment without
+    // stamping per-point breaks — so backtracking, which removes tail
+    // coordinates, can never strand a break at a vanished index.
+    //
+    // The break must be forced to type 'line' even when one already sits at
+    // the entry index. When the trace starts as the FIRST drawing action (the
+    // click lands directly on an origin-feature vertex), traceEntryIdx is 0 —
+    // exactly where drawstart seeded {index: 0, type: 'arc'}. A simple
+    // "append when last.index < entry" test never fires there, leaving the
+    // traced tessellation typed 'arc', so buildSketchSubs fits a CircularString
+    // through every tessellation sample and a rogue arc bulges along a run that
+    // should hug the traced geometry. Find-or-replace keeps exactly one break
+    // at the entry index, retyped to 'line'.
+    if (traceEntryIdx < 0) {
       return;
     }
-    // Use length-2 (last committed coord) rather than length-1 (the
-    // about-to-be-popped tip): the next appendCoordinates from the trace
-    // walk pops the tip and shifts everything past it, which would leave
-    // a tip-anchored break pointing at the wrong post-walk coordinate.
-    const idx = lastSketchCoordinates.length - 2;
-    const type =
-      e.traceSourceSubGeometryKind === 'CircularString' ? 'arc' : 'line';
-    const last = segmentBreaks[segmentBreaks.length - 1];
-
-    // Force a split at the trace-entry vertex even if its type matches the
-    // leading break's type (without this, the pre-trace freehand stub merges
-    // with the traced sequence into one bogus arc/line).
-    // Also handles traceStartIdx===0 where the initial break already exists.
-    if (traceStartIdx >= 0 && idx === traceStartIdx) {
-      if (!last || last.index < idx) {
-        segmentBreaks.push({index: idx, type});
-      }
-      traceStartIdx = -1;
-      return;
+    const existing = segmentBreaks.find((b) => b.index === traceEntryIdx);
+    if (existing) {
+      existing.type = 'line';
+    } else {
+      segmentBreaks.push({index: traceEntryIdx, type: 'line'});
     }
-
-    // Same position re-fired: no duplicate break needed.
-    if (last && last.type === type && last.index === idx) {
-      return;
-    }
-
-    // Consecutive line→line: one LineString segment is correct, no new break.
-    // Arc→arc must NOT be merged: each arc is its own sub-geometry.
-    if (last && last.type === 'line' && type === 'line') {
-      return;
-    }
-
-    segmentBreaks.push({index: idx, type});
   });
 
   drawInteraction.on('traceend', (e) => {
     traceActive = false;
-    traceStartIdx = -1;
     currentTraceFeature = null;
-    // Stamp a return-to-user-segment-type break that starts the post-trace
-    // free segment at the trace-exit vertex. At traceend time (which fires
-    // INSIDE `toggleTraceState_`, BEFORE the exit-click's `addToDrawing_`
-    // pushes the click coord), the trace walk has just tip-duplicated the
-    // exit vertex (via `appendCoordinates` which pops + pushes + tip-dups),
-    // so the sketch ends with two adjacent coords at the exit vertex
-    // (`length - 2` and `length - 1`). The exit-click's `addToDrawing_`
-    // then pushes a THIRD copy. Anchoring the next free segment at
-    // `length - 2` (the older walk-committed copy) makes the segment slice
-    // `[exit, exit, exit, next_free, ...]` — a 3-point CircularString
-    // through coincident points which renders as a wild degenerate arc
-    // that "consumes" everything that follows. Use `length - 1` (the
-    // walk's tip-dup) so the segment slice starts AFTER the first
-    // duplicate, yielding `[exit, exit, next_free, ...]` with the
-    // duplicate tucked at the segment's start (LineString- or
-    // arc-tail-tolerant) and the visible free segment fitting cleanly.
+    const E = traceEntryIdx;
+    traceEntryIdx = -1;
     activeTraceEntryIdx = -1;
-    const exitIdx = Math.max(0, lastSketchCoordinates.length - 1);
-    const last = segmentBreaks[segmentBreaks.length - 1];
-    if (!last || last.index !== exitIdx || last.type !== currentSegType) {
-      segmentBreaks.push({index: exitIdx, type: currentSegType});
-    }
     if (e.traceSourceFeature) {
       traceExcludedFeatures.add(e.traceSourceFeature);
     }
@@ -1260,6 +1514,59 @@ function wireTraceLifecycle(drawInteraction) {
       !traceBoundaryRings.includes(e.traceSourceGeometry)
     ) {
       traceBoundaryRings.push(e.traceSourceGeometry);
+    }
+
+    // The sketch tail is now canonical (Draw.canonicalizeTraceRun_ ran before
+    // this event). `traceSourceCanonicalEdges` describes the traced run as an
+    // ordered list of {kind, controlPointCount}. Stamp segment breaks at the
+    // exact canonical indices, walking control-point counts from the entry.
+    const edges = e.traceSourceCanonicalEdges || [];
+    // Drop the temporary live-preview break (and any defensive stragglers) at
+    // or beyond the entry vertex before re-stamping from the canonical run.
+    segmentBreaks = segmentBreaks.filter((b) => b.index < E);
+    if (edges.length === 0) {
+      return;
+    }
+    let pos = E;
+    let lastType = null;
+    for (let k = 0; k < edges.length; k++) {
+      const type = edges[k].kind === 'CircularString' ? 'arc' : 'line';
+      // Always split the first traced edge from the pre-trace segment. Merge
+      // consecutive traced line edges into one LineString; arcs never merge.
+      if (k === 0 || !(type === 'line' && lastType === 'line')) {
+        segmentBreaks.push({index: pos, type});
+      }
+      lastType = type;
+      pos += edges[k].controlPointCount - 1;
+    }
+    // Record the canonical run's coordinate span so the commit-time tripwire
+    // checks exactly these indices (and nothing free/edge-snapped).
+    if (pos > E) {
+      tracedIndexRanges.push({start: E, end: pos});
+    }
+    // Start the post-trace free segment at the exit vertex (pos), typed to the
+    // user's current mode. Skip when it would merge with a trailing traced
+    // line of the same type.
+    if (!(currentSegType === 'line' && lastType === 'line')) {
+      segmentBreaks.push({index: pos, type: currentSegType});
+    }
+
+    // Rebuild the sketch geometry from the now-canonical coordinates and the
+    // fresh breaks, then revalidate immediately. The canonicalization churn
+    // (removeLastPoints_/appendCoordinates) left the rendered CompoundCurve and
+    // `validationState` reflecting the STALE live-preview breaks; nothing else
+    // reruns geometryFunction until the next pointermove. Without this, a
+    // finish (double-click) or auto-close firing in that window would read a
+    // stale verdict and render collapsed-to-chords geometry.
+    const sketchFeature = draw.getOverlay().getSource().getFeatures()[0];
+    if (sketchFeature && lastSketchCoordinates.length >= 2) {
+      const sketchGeom = sketchFeature.getGeometry();
+      if (sketchGeom && sketchGeom.getType() === 'CompoundCurve') {
+        /** @type {CompoundCurve} */ (sketchGeom).setGeometriesArray(
+          buildSketchSubs(lastSketchCoordinates, segmentBreaks),
+        );
+        validateSketchTopology(sketchGeom, true);
+      }
     }
   });
 }
@@ -1391,6 +1698,7 @@ function addDrawInteraction() {
       segmentBreaks = [{index: 0, type: 'arc'}];
       traceExcludedFeatures = new Set();
       traceBoundaryRings = [];
+      tracedIndexRanges = [];
       userPlacedIndices.clear();
       userPlacedIndices.add(0); // first vertex
       const coords = e.feature.getGeometry().getCoordinates();
@@ -1423,85 +1731,58 @@ function addDrawInteraction() {
     // Replace the sketch's CompoundCurve with the proper final type.
     const mode = typeSelect.value;
     if (mode === 'CompoundCurve' || mode === 'CurvePolygon') {
-      const raw = lastSketchCoordinates.length
+      // The sketch is already canonical: traced runs are converted to exact
+      // source control points at `traceend` (Draw.canonicalizeTraceRun_), so
+      // `lastSketchCoordinates` and `segmentBreaks` are consistent with no
+      // post-hoc remapping needed.
+      const coords = lastSketchCoordinates.length
         ? lastSketchCoordinates.map((c) => c.slice())
         : e.feature.getGeometry().getCoordinates();
-      // Replace tessellated arc points with the exact source control points.
-      const coords = draw.getCanonicalCoordinates(raw);
-      // segmentBreaks holds indices into `raw`. After canonicalization the
-      // array is shorter (interior tessellation points spliced out), so each
-      // break's index must be remapped to its position in `coords`.
-      // Breaks are non-decreasing in raw-index order and must remain so in
-      // canonical-index order.  Scan forward from the previous break's
-      // canonical position to avoid landing on an earlier duplicate coordinate
-      // (e.g. raw[74]==raw[75]==[1000000,0]: a linear scan from 0 would map
-      // both breaks to canonical index 74 instead of 74 and 75).
-      const canonicalBreaks = [];
-      let searchFrom = 0;
-      for (const b of segmentBreaks) {
-        const rawCoord = raw[b.index];
-        if (!rawCoord) {
-          canonicalBreaks.push(b);
-          continue;
-        }
-        let found = -1;
-        for (let ci = searchFrom; ci < coords.length; ci++) {
-          if (
-            Math.abs(coords[ci][0] - rawCoord[0]) < 1e-6 &&
-            Math.abs(coords[ci][1] - rawCoord[1]) < 1e-6
-          ) {
-            found = ci;
-            break;
-          }
-        }
-        if (found === -1) {
-          // Fallback: coordinate was removed — clamp to end.
-          found = Math.min(b.index, coords.length - 1);
-        }
-        canonicalBreaks.push({index: found, type: b.type});
-        searchFrom = found; // next break must be >= this canonical position
+      const breaks = normalizeSegmentBreaks(segmentBreaks);
+
+      // Tripwire: every coordinate inside a canonicalized trace run MUST be an
+      // exact source control point (graph vertex or arc throughpoint). If a
+      // tessellated arc point slipped through as canonical this surfaces it
+      // loudly instead of silently committing bad geometry. Only traced index
+      // ranges are checked, so free / edge-snapped coordinates that happen to
+      // lie on a boundary are not misreported.
+      const violation = findCanonicalContractViolation(
+        coords,
+        tracedIndexRanges,
+      );
+      if (violation) {
+        // eslint-disable-next-line no-console
+        console.error('[CANONICAL CONTRACT]', violation);
+        status('⚠ Canonical contract violation — see console.');
       }
-      // Deduplicate breaks that mapped to the same canonical index (can happen
-      // when two adjacent raw coords are equal — e.g. the trace-exit dupicate
-      // raw[74]==raw[75] both map to the same canonical slot).  Keep the last
-      // entry at each index so the post-trace segment type wins.
-      const deduped = normalizeSegmentBreaks(canonicalBreaks);
-      /* eslint-disable no-console */
-      console.group('%c[CANONICAL DUMP]', 'color:#f80;font-weight:bold');
-      console.log(
-        'canonical coords:',
-        coords.map((c) => `[${c[0].toFixed(1)},${c[1].toFixed(1)}]`).join(' '),
-      );
-      console.log(
-        'deduped breaks:',
-        deduped.map((b) => `{${b.index},${b.type}}`).join(' '),
-      );
-      const canSubs = buildSketchSubs(coords, deduped);
-      canSubs.forEach((sub, i) => {
-        const c = sub.getCoordinates ? sub.getCoordinates() : [];
-        const label = `${sub.getType()}  pts=${c.length}`;
-        if (c.length <= 10) {
-          console.log(
-            `  [${i}] ${label}  ${c.map((p) => `[${p[0].toFixed(1)},${p[1].toFixed(1)}]`).join(' → ')}`,
-          );
-        } else {
-          console.log(`  [${i}] ${label}`);
-        }
-      });
-      console.groupEnd();
-      /* eslint-enable no-console */
-      // Close-by-duplicating-first for CurvePolygon if the user didn't.
+
+      // Close CurvePolygon by duplicating the first vertex. Force the closing
+      // edge to a LineString: it is never rendered during the sketch, so it
+      // must not inherit an arc parity (odd/even control-point count) the user
+      // never established — an even count would make CircularString throw.
       if (mode === 'CurvePolygon' && coords.length >= 3) {
         const first = coords[0];
         const last = coords[coords.length - 1];
         if (first[0] !== last[0] || first[1] !== last[1]) {
+          const closeIdx = coords.length - 1;
           coords.push(first.slice());
+          breaks.push({index: closeIdx, type: 'line'});
         }
       }
-      e.feature.setGeometry(buildFinalGeometry(coords, deduped, mode));
+      e.feature.setGeometry(
+        buildFinalGeometry(coords, normalizeSegmentBreaks(breaks), mode),
+      );
     }
     resetSketchState();
-    status('Feature added. Draw another or switch to edit mode.');
+    // Give the freshly committed feature an honest multi-feature verdict at
+    // commit time. Without this, a finished feature is shown valid regardless
+    // of crossings until the next modify happens to revalidate it.
+    validateFeatures();
+    status(
+      validationState.isValid
+        ? 'Feature added. Draw another or switch to edit mode.'
+        : 'Feature added but crosses another feature — shown in red.',
+    );
     map.render();
   });
 
@@ -1611,210 +1892,6 @@ document.addEventListener('keydown', (e) => {
       ? 'Switched to ARC. Next click sets the curvature point.'
       : 'Switched to LINE. Click to add vertices.',
   );
-});
-
-// ── Validation debug dump ─────────────────────────────────────
-// Track last pointer map-coordinate so Space can find the hovered feature.
-/** @type {Array<number>|null} */
-let lastPointerCoord = null;
-map.on('pointermove', (e) => {
-  lastPointerCoord = e.coordinate;
-});
-
-/**
- * Surgical validation dump. Press Space while hovering a feature to see
- * exactly what validateFeatures does (and doesn't) find for it.
- *
- * Prints:
- *  1. Current global validationState.
- *  2. The feature under the cursor + its geometry type / arc-segment count.
- *  3. Self-intersection check result.
- *  4. Per-pair crossing check against every other source feature,
- *     with both arc arrays and the raw crossing result.
- */
-/* eslint-disable no-console */
-function dumpValidation() {
-  function c2(c) {
-    return `[${c[0].toFixed(0)},${c[1].toFixed(0)}]`;
-  }
-  function seg6(s) {
-    return `b${c2(s)} m${c2([s[2], s[3]])} e${c2([s[4], s[5]])}`;
-  }
-
-  console.group(
-    `%c[VALIDATION DUMP] ${new Date().toISOString()}`,
-    'color:#f80;font-weight:bold',
-  );
-
-  // ── 1. Current validation state ──────────────────────────
-  console.group(
-    `validationState  isValid=${validationState.isValid}  crossings=${validationState.crossingPoints.length}`,
-  );
-  validationState.crossingPoints.forEach((p, i) =>
-    console.log(`  crossing[${i}]: ${c2(p)}`),
-  );
-  console.groupEnd();
-
-  // ── 2. Feature under cursor ───────────────────────────────
-  const allFeatures = source.getFeatures().filter((f) => !f.get('_snapPoint'));
-
-  let hoveredFeature = null;
-  if (lastPointerCoord) {
-    hoveredFeature = source.getClosestFeatureToCoordinate(
-      lastPointerCoord,
-      (f) => !f.get('_snapPoint'),
-    );
-  }
-  if (!hoveredFeature && allFeatures.length > 0) {
-    hoveredFeature = allFeatures[0];
-    console.log('(no cursor coord — falling back to first feature)');
-  }
-  if (!hoveredFeature) {
-    console.log('no features in source');
-    console.groupEnd();
-    return;
-  }
-
-  const hg = hoveredFeature.getGeometry();
-  const hType = hg ? hg.getType() : 'null';
-  const hArcs = hg ? collectCurveSegments(hg) : [];
-  const hIdx = allFeatures.indexOf(hoveredFeature);
-  console.log(
-    `hovered feature[${hIdx}]  type=${hType}  arcSegs=${hArcs.length}`,
-  );
-  if (hArcs.length > 0) {
-    console.group('arc segments');
-    hArcs.forEach((s, i) => console.log(`  [${i}] ${seg6(s)}`));
-    console.groupEnd();
-  }
-
-  // flat tess data
-  const hFlat = hg ? getTessellatedFlatCoords(hg) : null;
-  if (hFlat) {
-    console.log(
-      `tess flat: ${hFlat.coords.length / 2} pts  ends=[${hFlat.ends.join(',')}]`,
-    );
-  } else {
-    console.log('tess flat: null (getTessellatedFlatCoords returned null)');
-  }
-
-  // ── 3. Self-intersection ──────────────────────────────────
-  if (hType === 'CurvePolygon' && hg) {
-    let selfX;
-    try {
-      selfX = hg.getSelfIntersections(
-        CROSSING_EPSILON_SQ,
-        SAME_ARC_TOLERANCE_SQ,
-      );
-    } catch (err) {
-      selfX = null;
-      console.log(`getSelfIntersections threw: ${err.message}`);
-    }
-    if (selfX) {
-      console.log(
-        `getSelfIntersections: ${selfX.length === 0 ? 'NONE' : selfX.map(c2).join(' ')}`,
-      );
-    }
-  } else {
-    console.log(`getSelfIntersections: skipped (type=${hType})`);
-  }
-
-  // ── 4. Pair-wise crossing checks ─────────────────────────
-  console.group(`pair-wise checks vs ${allFeatures.length - 1} other(s)`);
-  for (const other of allFeatures) {
-    if (other === hoveredFeature) {
-      continue;
-    }
-    const og = other.getGeometry();
-    const oType = og ? og.getType() : 'null';
-    const oIdx = allFeatures.indexOf(other);
-    const oArcs = og ? collectCurveSegments(og) : [];
-
-    if (hType === 'CurvePolygon' && oType === 'CurvePolygon' && hg && og) {
-      // arc-vs-arc path
-      let cross;
-      try {
-        cross = getArcArrayCrossings(
-          hArcs,
-          oArcs,
-          CROSSING_EPSILON_SQ,
-          true,
-          SAME_ARC_TOLERANCE_SQ,
-        );
-      } catch (err) {
-        console.log(
-          `  [${hIdx}] vs [${oIdx}]  getArcArrayCrossings threw: ${err.message}`,
-        );
-        continue;
-      }
-      console.group(
-        `  [${hIdx}](CvP,arcs=${hArcs.length}) vs [${oIdx}](CvP,arcs=${oArcs.length})  → crossings=${cross.length}`,
-      );
-      cross.forEach((p, i) => console.log(`    crossing[${i}]: ${c2(p)}`));
-      if (cross.length === 0) {
-        // Show a sample of each arc array so we can spot obvious mismatches.
-        if (hArcs.length > 0) {
-          console.log(`    hovered arcs[0]: ${seg6(hArcs[0])}`);
-        }
-        if (oArcs.length > 0) {
-          console.log(`    other   arcs[0]: ${seg6(oArcs[0])}`);
-        }
-      }
-      console.groupEnd();
-    } else {
-      // flat-segment path
-      const a = hg ? getTessellatedFlatCoords(hg) : null;
-      const b = og ? getTessellatedFlatCoords(og) : null;
-      if (!a || !b) {
-        console.log(
-          `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  → SKIP (flat=null: a=${!a} b=${!b})`,
-        );
-        continue;
-      }
-      let cross;
-      try {
-        cross = getSegmentsCrossingPoint(
-          a.coords,
-          0,
-          a.ends[0],
-          b.coords,
-          0,
-          b.ends[0],
-          2,
-        );
-      } catch (err) {
-        console.log(
-          `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  getSegmentsCrossingPoint threw: ${err.message}`,
-        );
-        continue;
-      }
-      console.log(
-        `  [${hIdx}](${hType}) vs [${oIdx}](${oType})  flatPts: ${a.coords.length / 2} vs ${b.coords.length / 2}  → ${cross ? `CROSS ${c2(cross)}` : 'none'}`,
-      );
-    }
-  }
-  console.groupEnd();
-
-  console.groupEnd();
-}
-/* eslint-enable no-console */
-
-// Spacebar — validation dump (works at any time, not just during drawing).
-document.addEventListener('keydown', (e) => {
-  if (e.key !== ' ' && e.code !== 'Space') {
-    return;
-  }
-  const tag = /** @type {HTMLElement} */ (e.target).tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-    return;
-  }
-  e.preventDefault();
-  try {
-    dumpValidation();
-  } catch (err) {
-    /* eslint-disable-next-line no-console */
-    console.error('[SPACE] dumpValidation threw:', err);
-  }
 });
 
 // ESC — abort current draw and switch to edit mode.

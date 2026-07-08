@@ -90,15 +90,16 @@ class TraceSource {
     this.detachCollection_ = null;
 
     if (this.features_ instanceof Collection) {
+      const collection = this.features_;
       const invalidate = () => {
         this.vertices_ = null;
         this.edges_ = null;
       };
-      this.features_.on('add', invalidate);
-      this.features_.on('remove', invalidate);
+      collection.on('add', invalidate);
+      collection.on('remove', invalidate);
       this.detachCollection_ = () => {
-        this.features_.un('add', invalidate);
-        this.features_.un('remove', invalidate);
+        collection.un('add', invalidate);
+        collection.un('remove', invalidate);
       };
     }
   }
@@ -197,8 +198,18 @@ class TraceSource {
   }
 
   /**
+   * Build LineString edges for a ring or open line.
+   *
+   * PRECONDITION for `closed === true`: `coordinates` MUST carry the explicit
+   * duplicate closing coordinate, i.e. `coordinates[length - 1]` equals
+   * `coordinates[0]` (the standard OpenLayers closed-ring representation, e.g.
+   * `[A, B, C, A]`). The final segment then wires its end back to the shared
+   * vertex 0 instead of adding a coincident duplicate vertex. Passing an
+   * unclosed array (`[A, B, C]`) with `closed === true` drops the last real
+   * segment and produces a malformed graph — callers must close the ring first.
+   *
    * @private
-   * @param {Array<import("../coordinate.js").Coordinate>} coordinates Ring or line coordinates.
+   * @param {Array<import("../coordinate.js").Coordinate>} coordinates Ring or line coordinates. For a closed ring the last coordinate must duplicate the first.
    * @param {boolean} closed True for closed rings (the closing coordinate is wired back to the first vertex without creating a duplicate).
    * @param {import("../geom/SimpleGeometry.js").default} subGeometry Owning sub-geometry.
    * @param {import("../Feature.js").default} feature Owning feature.
@@ -524,9 +535,10 @@ class TraceSource {
         edge.endVertex.coordinate.slice(),
       ];
     }
-    const circular = /** @type {import("../geom/CircularString.js").default} */ (
-      edge.subGeometry
-    );
+    const circular =
+      /** @type {import("../geom/CircularString.js").default} */ (
+        edge.subGeometry
+      );
     const coords = circular.getCoordinates();
     const i = /** @type {number} */ (edge.arcIndex);
     return [
