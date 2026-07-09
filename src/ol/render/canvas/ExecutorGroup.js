@@ -19,6 +19,9 @@ import Executor from './Executor.js';
  */
 export const ALL = [
   'Polygon',
+  'CircularString',
+  'CompoundCurve',
+  'CurvePolygon',
   'Circle',
   'LineString',
   'Image',

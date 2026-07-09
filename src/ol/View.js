@@ -22,6 +22,7 @@ import {
   isEmpty,
 } from './extent.js';
 import {VOID} from './functions.js';
+import {isTessellatable} from './geom/Geometry.js';
 import {fromExtent as polygonFromExtent} from './geom/Polygon.js';
 import {clamp, modulo} from './math.js';
 import {
@@ -1390,8 +1391,20 @@ class View extends BaseObject {
     const rotation = this.getRotation();
     const cosAngle = Math.cos(rotation);
     const sinAngle = Math.sin(-rotation);
-    const coords = geometry.getFlatCoordinates();
-    const stride = geometry.getStride();
+    // for curve types, use tessellated coordinates so the rotated extent
+    // accounts for arc bulge, not just control points
+    let coords;
+    let stride;
+    const curved = /** @type {import("./geom/CircularString.js").default} */ (
+      geometry
+    );
+    if (isTessellatable(geometry)) {
+      coords = curved.tessellate();
+      stride = 2;
+    } else {
+      coords = geometry.getFlatCoordinates();
+      stride = geometry.getStride();
+    }
     let minRotX = +Infinity;
     let minRotY = +Infinity;
     let maxRotX = -Infinity;

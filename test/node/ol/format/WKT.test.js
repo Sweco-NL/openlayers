@@ -968,6 +968,151 @@ describe('ol/format/WKT.js', function () {
     ]);
   });
 
+  it('CircularString read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING(0 0,1 1,2 0)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with Z read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING Z(0 0 1,1 1 2,2 0 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with M read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING M(0 0 1,1 1 2,2 0 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CircularString with ZM read / written correctly', function () {
+    const wkt = 'CIRCULARSTRING ZM(0 0 1 1,1 1 2 2,2 0 3 3)';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CircularString');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1, 1],
+      [1, 1, 2, 2],
+      [2, 0, 3, 3],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve read / written correctly', function () {
+    const wkt = 'COMPOUNDCURVE(CIRCULARSTRING(0 0,1 1,2 0),(2 0,3 1))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+      [3, 1],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with Z read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE Z(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+      [3, 1, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with M read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE M(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1],
+      [1, 1, 2],
+      [2, 0, 3],
+      [3, 1, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CompoundCurve with ZM read / written correctly', function () {
+    const wkt =
+      'COMPOUNDCURVE ZM(CIRCULARSTRING(0 0 1 1,1 1 2 2,2 0 3 3),(2 0 3 3,3 1 4 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CompoundCurve');
+    expect(geom.getCoordinates()).to.eql([
+      [0, 0, 1, 1],
+      [1, 1, 2, 2],
+      [2, 0, 3, 3],
+      [3, 1, 4, 4],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon read / written correctly', function () {
+    const wkt = 'CURVEPOLYGON(CIRCULARSTRING(0 0,1 1,2 0),(2 0,3 1))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([0, 0, 1, 1, 2, 0, 2, 0, 3, 1]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with Z read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON Z(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 2, 2, 0, 3, 2, 0, 3, 3, 1, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with M read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON M(CIRCULARSTRING(0 0 1,1 1 2,2 0 3),(2 0 3,3 1 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 2, 2, 0, 3, 2, 0, 3, 3, 1, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
+  it('CurvePolygon with ZM read / written correctly', function () {
+    const wkt =
+      'CURVEPOLYGON ZM(CIRCULARSTRING(0 0 1 1,1 1 2 2,2 0 3 3),(2 0 3 3,3 1 4 4))';
+    const geom = format.readGeometry(wkt);
+    expect(geom.getType()).to.eql('CurvePolygon');
+    expect(geom.getFlatCoordinates()).to.eql([
+      0, 0, 1, 1, 1, 1, 2, 2, 2, 0, 3, 3, 2, 0, 3, 3, 3, 1, 4, 4,
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
+  });
+
   it('Empty geometries read / written correctly', function () {
     const wkt = 'POINT EMPTY';
     const geom = format.readGeometry(wkt);
@@ -1044,6 +1189,25 @@ describe('ol/format/WKT.js', function () {
       [4, 6],
       [7, 10],
     ]);
+  });
+
+  it('GeometryCollection with curve types read / written correctly', function () {
+    const wkt =
+      'GEOMETRYCOLLECTION(POINT(1 2),CIRCULARSTRING(0 0,1 1,2 0),COMPOUNDCURVE(CIRCULARSTRING(3 0,4 1,5 0),(5 0,6 0)))';
+    const geom = format.readGeometry(wkt);
+    const geoms = geom.getGeometries();
+    expect(geoms.length).to.eql(3);
+    expect(geom.getType()).to.eql('GeometryCollection');
+    expect(geoms[0].getType()).to.eql('Point');
+    expect(geoms[1].getType()).to.eql('CircularString');
+    expect(geoms[2].getType()).to.eql('CompoundCurve');
+    expect(geoms[0].getCoordinates()).to.eql([1, 2]);
+    expect(geoms[1].getCoordinates()).to.eql([
+      [0, 0],
+      [1, 1],
+      [2, 0],
+    ]);
+    expect(format.writeGeometry(geom)).to.eql(wkt);
   });
 
   it('Empty GeometryCollection read / written correctly', function () {

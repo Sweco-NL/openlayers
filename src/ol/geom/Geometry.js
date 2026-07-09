@@ -24,10 +24,11 @@ import {transform2D} from './flat/transform.js';
  */
 
 /**
- * @typedef {'Point' | 'LineString' | 'LinearRing' | 'Polygon' | 'MultiPoint' | 'MultiLineString' | 'MultiPolygon' | 'GeometryCollection' | 'Circle'} Type
+ * @typedef {'Point' | 'CircularString' | 'CompoundCurve' | 'CurvePolygon' | 'LineString' | 'LinearRing' | 'Polygon' | 'MultiPoint' | 'MultiLineString' | 'MultiPolygon' | 'GeometryCollection' | 'Circle'} Type
  * The geometry type.  One of `'Point'`, `'LineString'`, `'LinearRing'`,
  * `'Polygon'`, `'MultiPoint'`, `'MultiLineString'`, `'MultiPolygon'`,
- * `'GeometryCollection'`, or `'Circle'`.
+ * `'GeometryCollection'`, `'Circle'`, `'CircularString'`, `'CompoundCurve'`,
+ *  or `'CurvePolygon'`.
  */
 
 /**
@@ -342,6 +343,26 @@ class Geometry extends BaseObject {
     this.applyTransform(transformFn);
     return this;
   }
+}
+
+/**
+ * Geometry types whose vertices bulge along arcs and therefore expose a
+ * `tessellate()` method producing stride-2 flat coordinates, rather than
+ * carrying polyline-ready flat coordinates directly.
+ * @type {Array<Type>}
+ */
+const TESSELLATABLE_TYPES = ['CircularString', 'CompoundCurve', 'CurvePolygon'];
+
+/**
+ * Determine whether a geometry is a curve type that must be tessellated (i.e.
+ * exposes a `tessellate()` method) before it can be treated as a polyline.
+ * This is the canonical replacement for `typeof geometry.tessellate ===
+ * 'function'` duck-typing.
+ * @param {Geometry} geometry The geometry to test.
+ * @return {boolean} The geometry is a tessellatable curve type.
+ */
+export function isTessellatable(geometry) {
+  return TESSELLATABLE_TYPES.includes(geometry.getType());
 }
 
 export default Geometry;

@@ -1,0 +1,48 @@
+---
+layout: example.html
+title: Topological Curve Drawing
+shortdesc: Draw curves with topological validation, boundary tracing and shared arc geometries.
+docs: >
+  Demonstrates topology enforcement during curve drawing and editing.
+  <ul>
+    <li><strong>Crossing prevention</strong> — clicks that would create
+    edge crossings (self-intersections or overlaps) are rejected.</li>
+    <li><strong>Boundary tracing</strong> — click on an existing
+    CurvePolygon boundary to trace along it; the traced portion is
+    reconstructed as actual arc sub-geometries (not tessellated
+    approximations).</li>
+    <li><strong>Shared boundaries</strong> — traced arcs are exact copies
+    of the source feature's CircularString/CompoundCurve segments,
+    ensuring zero-gap, database-quality topology.</li>
+    <li><strong>Modify validation</strong> — editing a vertex that would
+    create a self-intersection or overlap is automatically reverted.</li>
+    <li><strong>Snapping</strong> — vertex, edge and intersection
+    snapping ensures topologically correct adjacency.</li>
+  </ul>
+  Uses only built-in OpenLayers topology primitives (no JSTS).
+tags: "draw, topology, curve, curvepolygon, compoundcurve, circularstring, snap, trace, validation"
+---
+<div id="map" class="map"></div>
+<form class="form-inline">
+  <label for="type">Draw &nbsp;</label>
+  <select id="type">
+    <option value="CurvePolygon">CurvePolygon</option>
+    <option value="CompoundCurve">CompoundCurve</option>
+    <option value="CircularString">CircularString</option>
+    <option value="None">None (edit)</option>
+  </select>
+  &nbsp;
+  <button type="button" id="undo">Undo</button>
+  <button type="button" id="start-draw">Start Draw</button>
+  <button type="button" id="stop-draw">Stop (ESC)</button>
+  <button type="button" id="clear">Clear All</button>
+  &nbsp;
+  <span id="segment-mode" style="font-weight:bold; color:#c00"></span>
+</form>
+<div style="margin-top:4px">
+  <span id="topology-status"
+    style="font-size:13px; font-weight:bold; padding:2px 8px; border-radius:3px;
+           color:#fff; background:#28a745">&#x2713; Valid</span>
+  &nbsp;
+  <span id="status" style="font-size:12px; color:#666"></span>
+</div>

@@ -13,6 +13,9 @@ import {
   never,
 } from '../../../../../src/ol/events/condition.js';
 import Circle from '../../../../../src/ol/geom/Circle.js';
+import CircularString from '../../../../../src/ol/geom/CircularString.js';
+import CompoundCurve from '../../../../../src/ol/geom/CompoundCurve.js';
+import CurvePolygon from '../../../../../src/ol/geom/CurvePolygon.js';
 import GeometryCollection from '../../../../../src/ol/geom/GeometryCollection.js';
 import LineString from '../../../../../src/ol/geom/LineString.js';
 import MultiPoint from '../../../../../src/ol/geom/MultiPoint.js';
@@ -483,21 +486,21 @@ describe('ol.interaction.Modify', function () {
       });
       map.addInteraction(modify);
 
-      // Move first vertex
+      // move first vertex
       simulateEvent('pointermove', 0, 0, null, 0);
       simulateEvent('pointerdown', 0, 0, null, 0);
       simulateEvent('pointermove', -10, -10, null, 0);
       simulateEvent('pointerdrag', -10, -10, null, 0);
       simulateEvent('pointerup', -10, -10, null, 0);
 
-      // Move middle vertex
+      // move middle vertex
       simulateEvent('pointermove', 0, -40, null, 0);
       simulateEvent('pointerdown', 0, -40, null, 0);
       simulateEvent('pointermove', 10, -30, null, 0);
       simulateEvent('pointerdrag', 10, -30, null, 0);
       simulateEvent('pointerup', 10, -30, null, 0);
 
-      // Move last vertex
+      // move last vertex
       simulateEvent('pointermove', 40, 0, null, 0);
       simulateEvent('pointerdown', 40, 0, null, 0);
       simulateEvent('pointermove', 50, -10, null, 0);
@@ -533,7 +536,7 @@ describe('ol.interaction.Modify', function () {
       });
       map.addInteraction(modify);
 
-      // Drag the first shared vertex from [0, 0] to [-10, -10]
+      // drag the first shared vertex from [0, 0] to [-10, -10]
       simulateEvent('pointermove', 0, 0, null, 0);
       simulateEvent('pointerdown', 0, 0, null, 0);
       simulateEvent('pointermove', -10, 10, null, 0);
@@ -543,14 +546,14 @@ describe('ol.interaction.Modify', function () {
       let coordsZ1 = lineZ1.getGeometry().getCoordinates();
       let coordsZ2 = lineZ2.getGeometry().getCoordinates();
 
-      // Each line should preserve its own Z; non-dragged vertices unchanged
+      // each line should preserve its own Z; non-dragged vertices unchanged
       expect(coordsZ1[0]).to.eql([-10, -10, 100]);
       expect(coordsZ1[1]).to.eql([10, 20, 200]);
 
       expect(coordsZ2[0]).to.eql([-10, -10, 999]);
       expect(coordsZ2[1]).to.eql([10, 20, 888]);
 
-      // Second drag: move the second shared vertex from [10, 20] to [15, 25]
+      // second drag: move the second shared vertex from [10, 20] to [15, 25]
       simulateEvent('pointermove', 10, -20, null, 0);
       simulateEvent('pointerdown', 10, -20, null, 0);
       simulateEvent('pointermove', 15, -25, null, 0);
@@ -593,7 +596,7 @@ describe('ol.interaction.Modify', function () {
       });
       map.addInteraction(modify);
 
-      // Drag the first shared vertex from [0, 0] to [-10, -10]
+      // drag the first shared vertex from [0, 0] to [-10, -10]
       simulateEvent('pointermove', 0, 0, null, 0);
       simulateEvent('pointerdown', 0, 0, null, 0);
       simulateEvent('pointermove', -10, 10, null, 0);
@@ -603,17 +606,17 @@ describe('ol.interaction.Modify', function () {
       let coordsXYZ = lineXYZ.getGeometry().getCoordinates();
       let coordsXY = lineXY.getGeometry().getCoordinates();
 
-      // XYZ line: dragged vertex should move, preserve Z; others unchanged
+      // xYZ line: dragged vertex should move, preserve Z; others unchanged
       expect(coordsXYZ[0]).to.eql([-10, -10, 100]);
       expect(coordsXYZ[1]).to.eql([10, 20, 200]);
       expect(coordsXYZ[2]).to.eql([0, 40, 300]);
 
-      // XY line: dragged vertex should move, stay 2D; others unchanged
+      // xY line: dragged vertex should move, stay 2D; others unchanged
       expect(coordsXY[0]).to.eql([-10, -10]);
       expect(coordsXY[1]).to.eql([10, 20]);
       expect(coordsXY[2]).to.eql([0, 40]);
 
-      // Second drag: move the second shared vertex from [10, 20] to [15, 25]
+      // second drag: move the second shared vertex from [10, 20] to [15, 25]
       simulateEvent('pointermove', 10, -20, null, 0);
       simulateEvent('pointerdown', 10, -20, null, 0);
       simulateEvent('pointermove', 15, -25, null, 0);
@@ -653,7 +656,7 @@ describe('ol.interaction.Modify', function () {
       });
       map.addInteraction(modify);
 
-      // Drag from [0, 0] — without sharedVerticesEqual, only one line should move
+      // drag from [0, 0] - without sharedVerticesEqual, only one line should move
       simulateEvent('pointermove', 0, 0, null, 0);
       simulateEvent('pointerdown', 0, 0, null, 0);
       simulateEvent('pointermove', -10, 10, null, 0);
@@ -663,7 +666,7 @@ describe('ol.interaction.Modify', function () {
       const coordsZ1 = lineZ1.getGeometry().getCoordinates();
       const coordsZ2 = lineZ2.getGeometry().getCoordinates();
 
-      // Only one line should have moved (default behavior compares all dimensions)
+      // only one line should have moved (default behavior compares all dimensions)
       const z1Moved = coordsZ1[0][0] === -10 && coordsZ1[0][1] === -10;
       const z2Moved = coordsZ2[0][0] === -10 && coordsZ2[0][1] === -10;
       expect(z1Moved !== z2Moved).to.be(true);
@@ -2148,6 +2151,458 @@ describe('ol.interaction.Modify', function () {
         .getGeometry()
         .getCoordinates()[0][0];
       expect(finalCoords[0]).to.eql(finalCoords[finalCoords.length - 1]);
+    });
+  });
+
+  describe('curve geometry support', function () {
+    describe('CircularString', function () {
+      it('adds CircularString segments to the RTree', function () {
+        const feature = new Feature(
+          new CircularString([
+            [0, 0],
+            [5, 5],
+            [10, 0],
+          ]),
+        );
+        const features = new Collection([feature]);
+        const modify = new Modify({features: features});
+        // 3 control points -> 2 segments
+        const rbushEntries = modify.rBush_.getAll();
+        expect(rbushEntries.length).to.be(2);
+        expect(rbushEntries[0].feature).to.be(feature);
+        expect(rbushEntries[0].geometry).to.be(feature.getGeometry());
+      });
+
+      it('adds 5-point CircularString segments to the RTree', function () {
+        const feature = new Feature(
+          new CircularString([
+            [0, 0],
+            [5, 5],
+            [10, 0],
+            [15, -5],
+            [20, 0],
+          ]),
+        );
+        const features = new Collection([feature]);
+        const modify = new Modify({features: features});
+        // 5 control points -> 4 segments
+        expect(modify.rBush_.getAll().length).to.be(4);
+      });
+
+      it('drags a CircularString control point', function (done) {
+        const circularString = new CircularString([
+          [0, 0],
+          [10, 20],
+          [20, 0],
+        ]);
+        const feature = new Feature(circularString);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        const events = trackEvents(feature, modify);
+
+        const revision = circularString.getRevision();
+
+        // drag the middle control point [10, 20] to [15, 15]
+        // map coords: [10, 20] -> pixel offset (10, -20)
+        simulateEvent('pointermove', 10, -20, null, 0);
+        simulateEvent('pointerdown', 10, -20, null, 0);
+        simulateEvent('pointermove', 15, -15, null, 0);
+        simulateEvent('pointerdrag', 15, -15, null, 0);
+        simulateEvent('pointerup', 15, -15, null, 0);
+
+        const coords = circularString.getCoordinates();
+        expect(coords[1][0]).to.be(15);
+        expect(coords[1][1]).to.be(15);
+        expect(circularString.getRevision()).to.be.greaterThan(revision);
+
+        validateEvents(events, features);
+        done();
+      });
+
+      it('inserts vertex on CircularString edge by arc-splitting', function () {
+        const circularString = new CircularString([
+          [0, 0],
+          [10, 20],
+          [20, 0],
+        ]);
+        const feature = new Feature(circularString);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        // click on edge between control points to insert a new vertex
+        simulateEvent('pointermove', 5, -10, null, 0);
+        simulateEvent('pointerdown', 5, -10, null, 0);
+        simulateEvent('pointerup', 5, -10, null, 0);
+        simulateEvent('click', 5, -10, null, 0);
+        simulateEvent('singleclick', 5, -10, null, 0);
+
+        // arc-splitting should produce 5 points (2 arcs from 1 arc)
+        const coords = circularString.getCoordinates();
+        expect(coords).to.have.length(5);
+        // original start and end points should be preserved
+        expect(coords[0][0]).to.be(0);
+        expect(coords[0][1]).to.be(0);
+        expect(coords[4][0]).to.be(20);
+        expect(coords[4][1]).to.be(0);
+      });
+
+      it('deletes a CircularString control point with > 3 points', function () {
+        const circularString = new CircularString([
+          [0, 0],
+          [5, 10],
+          [10, 0],
+          [15, -10],
+          [20, 0],
+        ]);
+        const feature = new Feature(circularString);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        const revision = circularString.getRevision();
+
+        // delete vertex at [5, 10] -> pixel (5, -10)
+        simulateEvent('pointerdown', 5, -10, {alt: true}, 0);
+        simulateEvent('pointerup', 5, -10, {alt: true}, 0);
+        simulateEvent('click', 5, -10, {alt: true}, 0);
+        simulateEvent('singleclick', 5, -10, {alt: true}, 0);
+
+        expect(circularString.getCoordinates()).to.have.length(4);
+        expect(circularString.getRevision()).to.be.greaterThan(revision);
+      });
+
+      it('does not delete when CircularString has only 3 points', function () {
+        const circularString = new CircularString([
+          [0, 0],
+          [10, 20],
+          [20, 0],
+        ]);
+        const feature = new Feature(circularString);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        const revision = circularString.getRevision();
+
+        // try to delete vertex at [10, 20]
+        simulateEvent('pointerdown', 10, -20, {alt: true}, 0);
+        simulateEvent('pointerup', 10, -20, {alt: true}, 0);
+        simulateEvent('click', 10, -20, {alt: true}, 0);
+        simulateEvent('singleclick', 10, -20, {alt: true}, 0);
+
+        // should still have 3 points - minimum for one arc
+        expect(circularString.getCoordinates()).to.have.length(3);
+        expect(circularString.getRevision()).to.equal(revision);
+      });
+    });
+
+    describe('CompoundCurve', function () {
+      it('adds CompoundCurve segments to the RTree', function () {
+        const compoundCurve = new CompoundCurve([
+          new CircularString([
+            [0, 0],
+            [5, 5],
+            [10, 0],
+          ]),
+          new LineString([
+            [10, 0],
+            [20, 0],
+          ]),
+        ]);
+        const feature = new Feature(compoundCurve);
+        const features = new Collection([feature]);
+        const modify = new Modify({features: features});
+        // CircularString: 3 pts -> 2 segments; LineString: 2 pts -> 1 segment
+        expect(modify.rBush_.getAll().length).to.be(3);
+      });
+
+      it('drags a CompoundCurve control point', function (done) {
+        const arc = new CircularString([
+          [0, 0],
+          [5, 10],
+          [10, 0],
+        ]);
+        const line = new LineString([
+          [10, 0],
+          [20, 0],
+        ]);
+        const compoundCurve = new CompoundCurve([arc, line]);
+        const feature = new Feature(compoundCurve);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        // drag the arc's middle control point [5, 10] to [5, 15]
+        simulateEvent('pointermove', 5, -10, null, 0);
+        simulateEvent('pointerdown', 5, -10, null, 0);
+        simulateEvent('pointermove', 5, -15, null, 0);
+        simulateEvent('pointerdrag', 5, -15, null, 0);
+        simulateEvent('pointerup', 5, -15, null, 0);
+
+        const arcCoords = arc.getCoordinates();
+        expect(arcCoords[1][0]).to.be(5);
+        expect(arcCoords[1][1]).to.be(15);
+        done();
+      });
+    });
+
+    describe('CurvePolygon', function () {
+      it('adds CurvePolygon ring segments to the RTree', function () {
+        const curvePolygon = new CurvePolygon([
+          new CircularString([
+            [0, 0],
+            [10, 10],
+            [20, 0],
+            [10, -10],
+            [0, 0],
+          ]),
+        ]);
+        const feature = new Feature(curvePolygon);
+        const features = new Collection([feature]);
+        const modify = new Modify({features: features});
+        // 5 control points -> 4 segments
+        expect(modify.rBush_.getAll().length).to.be(4);
+      });
+
+      it('adds CurvePolygon with multiple rings to the RTree', function () {
+        const curvePolygon = new CurvePolygon([
+          new CircularString([
+            [0, 0],
+            [10, 10],
+            [20, 0],
+            [10, -10],
+            [0, 0],
+          ]),
+          new CircularString([
+            [5, 0],
+            [10, 5],
+            [15, 0],
+            [10, -5],
+            [5, 0],
+          ]),
+        ]);
+        const feature = new Feature(curvePolygon);
+        const features = new Collection([feature]);
+        const modify = new Modify({features: features});
+        // 2 rings x 4 segments each = 8
+        expect(modify.rBush_.getAll().length).to.be(8);
+      });
+
+      it('drags a CurvePolygon ring control point', function (done) {
+        const ring = new CircularString([
+          [0, 0],
+          [10, 20],
+          [20, 0],
+          [10, -20],
+          [0, 0],
+        ]);
+        const curvePolygon = new CurvePolygon([ring]);
+        const feature = new Feature(curvePolygon);
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        // drag control point [10, 20] to [10, 25]
+        simulateEvent('pointermove', 10, -20, null, 0);
+        simulateEvent('pointerdown', 10, -20, null, 0);
+        simulateEvent('pointermove', 10, -25, null, 0);
+        simulateEvent('pointerdrag', 10, -25, null, 0);
+        simulateEvent('pointerup', 10, -25, null, 0);
+
+        const ringCoords = ring.getCoordinates();
+        expect(ringCoords[1][0]).to.be(10);
+        expect(ringCoords[1][1]).to.be(25);
+        done();
+      });
+
+      it('co-grabs shared vertex across two CurvePolygon features', function (done) {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const ringB = new CircularString([
+          [10, 0],
+          [15, 5],
+          [20, 0],
+          [15, -5],
+          [10, 0],
+        ]);
+
+        const featureA = new Feature(new CurvePolygon([ringA]));
+        const featureB = new Feature(new CurvePolygon([ringB]));
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, featureB]);
+
+        const modify = new Modify({source: source});
+        map.addInteraction(modify);
+
+        const revA = featureA.getGeometry().getRevision();
+        const revB = featureB.getGeometry().getRevision();
+
+        // Drag shared vertex [10, 0] to [12, 2]
+        simulateEvent('pointermove', 10, 0, null, 0);
+        simulateEvent('pointerdown', 10, 0, null, 0);
+        simulateEvent('pointermove', 12, -2, null, 0);
+        simulateEvent('pointerdrag', 12, -2, null, 0);
+        simulateEvent('pointerup', 12, -2, null, 0);
+
+        expect(featureA.getGeometry().getRevision()).to.be.greaterThan(revA);
+        expect(featureB.getGeometry().getRevision()).to.be.greaterThan(revB);
+
+        const coordsA = featureA
+          .getGeometry()
+          .getRingsArray()[0]
+          .getCoordinates();
+        const coordsB = featureB
+          .getGeometry()
+          .getRingsArray()[0]
+          .getCoordinates();
+
+        expect(coordsA[2][0]).to.be(12);
+        expect(coordsA[2][1]).to.be(2);
+        expect(coordsB[0][0]).to.be(12);
+        expect(coordsB[0][1]).to.be(2);
+        expect(coordsB[4][0]).to.be(12);
+        expect(coordsB[4][1]).to.be(2);
+
+        done();
+      });
+
+      it('modifyend includes both co-grabbed CurvePolygon features', function (done) {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const ringB = new CircularString([
+          [10, 0],
+          [15, 5],
+          [20, 0],
+          [15, -5],
+          [10, 0],
+        ]);
+
+        const featureA = new Feature(new CurvePolygon([ringA]));
+        const featureB = new Feature(new CurvePolygon([ringB]));
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, featureB]);
+
+        const modify = new Modify({source: source});
+        map.addInteraction(modify);
+
+        let modifyEndFeatures = null;
+        modify.on('modifyend', function (event) {
+          modifyEndFeatures = event.features.getArray();
+        });
+
+        simulateEvent('pointermove', 10, 0, null, 0);
+        simulateEvent('pointerdown', 10, 0, null, 0);
+        simulateEvent('pointermove', 12, -2, null, 0);
+        simulateEvent('pointerdrag', 12, -2, null, 0);
+        simulateEvent('pointerup', 12, -2, null, 0);
+
+        expect(modifyEndFeatures).to.not.be(null);
+        expect(modifyEndFeatures).to.contain(featureA);
+        expect(modifyEndFeatures).to.contain(featureB);
+
+        done();
+      });
+
+      it('shows vertexFeature on LineString edge within CompoundCurve ring', function () {
+        const ring = new CompoundCurve([
+          new CircularString([
+            [0, 0],
+            [15, 20],
+            [30, 0],
+          ]),
+          new LineString([
+            [30, 0],
+            [30, -40],
+            [0, -40],
+            [0, 0],
+          ]),
+        ]);
+        const feature = new Feature(new CurvePolygon([ring]));
+        features.length = 0;
+        features.push(feature);
+
+        const modify = new Modify({
+          features: new Collection(features),
+        });
+        map.addInteraction(modify);
+
+        // hover over the LineString edge midpoint at [30, -20] (pixel offset 30, 20)
+        // This is 20 pixels from both endpoints [30,0] and [30,-40], well
+        // outside the 10px pixelTolerance for snapping to vertex.
+        simulateEvent('pointermove', 30, 20, null, 0);
+        expect(modify.vertexFeature_).to.not.be(null);
+        expect(modify.vertexFeature_.get('existing')).to.be(false);
+
+        map.removeInteraction(modify);
+      });
+
+      it('filter excludes _snapPoint features from RBush', function () {
+        const ringA = new CircularString([
+          [0, 0],
+          [5, 5],
+          [10, 0],
+          [5, -5],
+          [0, 0],
+        ]);
+        const featureA = new Feature(new CurvePolygon([ringA]));
+
+        const snapPointFeature = new Feature(new Point([10, 0]));
+        snapPointFeature.set('_snapPoint', true);
+
+        const source = new VectorSource();
+        source.addFeatures([featureA, snapPointFeature]);
+
+        const modify = new Modify({
+          source: source,
+          filter: (feature) => !feature.get('_snapPoint'),
+        });
+        map.addInteraction(modify);
+
+        const rbushEntries = modify.rBush_.getAll();
+        const featuresInRBush = new Set(rbushEntries.map((e) => e.feature));
+
+        expect(featuresInRBush.has(featureA)).to.be(true);
+        expect(featuresInRBush.has(snapPointFeature)).to.be(false);
+      });
     });
   });
 });

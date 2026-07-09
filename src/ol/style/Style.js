@@ -559,6 +559,10 @@ export function createEditingStyle() {
   ];
   styles['MultiPoint'] = styles['Point'];
 
+  styles['CircularString'] = styles['LineString'];
+  styles['CompoundCurve'] = styles['LineString'];
+  styles['CurvePolygon'] = styles['Polygon'].concat(styles['LineString']);
+
   styles['GeometryCollection'] = styles['Polygon'].concat(
     styles['LineString'],
     styles['Point'],

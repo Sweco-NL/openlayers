@@ -7,6 +7,7 @@ import {linearRing as linearRingArea} from './flat/area.js';
 import {assignClosestPoint, maxSquaredDelta} from './flat/closest.js';
 import {deflateCoordinates} from './flat/deflate.js';
 import {inflateCoordinates} from './flat/inflate.js';
+import {forEach} from './flat/segments.js';
 import {douglasPeucker} from './flat/simplify.js';
 
 /**
@@ -111,6 +112,26 @@ class LinearRing extends SimpleGeometry {
       0,
       this.flatCoordinates.length,
       this.stride,
+    );
+  }
+
+  /**
+   * Iterate over each segment, calling the provided callback.
+   * If the callback returns a truthy value the function returns that
+   * value immediately. Otherwise the function returns `false`.
+   * @param {function(this: S, import("../coordinate.js").Coordinate, import("../coordinate.js").Coordinate): T} callback Function
+   *     called for each segment. The function will receive two arguments, the start and end coordinates of the segment.
+   * @return {T|boolean} Value.
+   * @template T,S
+   * @api
+   */
+  forEachSegment(callback) {
+    return forEach(
+      this.flatCoordinates,
+      0,
+      this.flatCoordinates.length,
+      this.stride,
+      callback,
     );
   }
 

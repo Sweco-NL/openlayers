@@ -2,6 +2,9 @@
  * @module ol/format/WKB
  */
 import Feature from '../Feature.js';
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
 import MultiLineString from '../geom/MultiLineString.js';
@@ -29,14 +32,13 @@ const WKBGeometryType = {
   MULTI_LINE_STRING: 5,
   MULTI_POLYGON: 6,
   GEOMETRY_COLLECTION: 7,
-
-  /*
   CIRCULAR_STRING: 8,
   COMPOUND_CURVE: 9,
   CURVE_POLYGON: 10,
-
   MULTI_CURVE: 11,
   MULTI_SURFACE: 12,
+
+  /*
   CURVE: 13,
   SURFACE: 14,
   */
@@ -146,6 +148,41 @@ class WkbReader {
   }
 
   /**
+   * @return {Array<import('../coordinate.js').Coordinate>} coords for CircularString
+   */
+  readCircularString() {
+    return this.readLineString();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readCompoundCurve() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readCurvePolygon() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readMultiCurve() {
+    return this.readGeometryCollection();
+  }
+
+  /**
+   * @return {Array<import('../geom/Geometry.js').default>} array of geometries
+   */
+  readMultiSurface() {
+    return this.readGeometryCollection();
+  }
+
+  /**
    * @return {Array<import('../coordinate.js').Coordinate>} coords for LineString / LinearRing
    */
   readLineString() {
@@ -182,7 +219,6 @@ class WkbReader {
   readWkbHeader(expectedTypeId) {
     const byteOrder = this.readUint8();
     const isLittleEndian = byteOrder > 0;
-
     const wkbType = this.readUint32(isLittleEndian);
     const wkbTypeThousandth = Math.floor((wkbType & 0x0fffffff) / 1000);
     const hasZ =
@@ -257,6 +293,21 @@ class WkbReader {
 
       case WKBGeometryType.GEOMETRY_COLLECTION:
         return this.readGeometryCollection();
+
+      case WKBGeometryType.CIRCULAR_STRING:
+        return this.readCircularString();
+
+      case WKBGeometryType.COMPOUND_CURVE:
+        return this.readCompoundCurve();
+
+      case WKBGeometryType.CURVE_POLYGON:
+        return this.readCurvePolygon();
+
+      case WKBGeometryType.MULTI_CURVE:
+        return this.readMultiCurve();
+
+      case WKBGeometryType.MULTI_SURFACE:
+        return this.readMultiSurface();
 
       default:
         throw new Error(
@@ -377,6 +428,32 @@ class WkbReader {
         );
 
       case WKBGeometryType.GEOMETRY_COLLECTION:
+        return new GeometryCollection(
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
+        );
+
+      case WKBGeometryType.CIRCULAR_STRING:
+        return new CircularString(
+          /** @type {Array<import('../coordinate.js').Coordinate>} */ (result),
+          this.layout_,
+        );
+
+      case WKBGeometryType.COMPOUND_CURVE:
+        return new CompoundCurve(
+          /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
+          this.layout_,
+        );
+
+      case WKBGeometryType.CURVE_POLYGON:
+        return new CurvePolygon(
+          /** @type {Array<import('../geom/CurvePolygon.js').CurveRing>} */ (
+            result
+          ),
+          this.layout_,
+        );
+
+      case WKBGeometryType.MULTI_CURVE:
+      case WKBGeometryType.MULTI_SURFACE:
         return new GeometryCollection(
           /** @type {Array<import('../geom/Geometry.js').default>} */ (result),
         );
@@ -563,6 +640,39 @@ class WkbWriter {
   }
 
   /**
+   * @param {Array<import('../coordinate.js').Coordinate>} coords coords
+   * @param {import("../geom/Geometry.js").GeometryLayout} layout layout
+   */
+  writeCircularString(coords, layout) {
+    this.writeUint32(coords.length); // numPoints
+    for (let i = 0; i < coords.length; i++) {
+      this.writePoint(coords[i], layout);
+    }
+  }
+
+  /**
+   * @param {Array<import('../geom/Geometry.js').default>} geometries geometries
+   * @param {import("../geom/Geometry.js").GeometryLayout} layout layout
+   */
+  writeCompoundCurve(geometries, layout) {
+    this.writeUint32(geometries.length); // numItems
+    for (let i = 0; i < geometries.length; i++) {
+      this.writeGeometry(geometries[i]);
+    }
+  }
+
+  /**
+   * @param {Array<import('../geom/Geometry.js').default>} geometries geometries
+   * @param {import("../geom/Geometry.js").GeometryLayout} layout layout
+   */
+  writeCurvePolygon(geometries, layout) {
+    this.writeUint32(geometries.length); // numRings
+    for (let i = 0; i < geometries.length; i++) {
+      this.writeGeometry(geometries[i]);
+    }
+  }
+
+  /**
    * @param {import("../geom/Geometry.js").default} geom geometry
    * @param {import("../geom/Geometry.js").GeometryLayout} [layout] layout
    * @return {import("../geom/Geometry.js").GeometryLayout} minimum layout made by common axes
@@ -595,6 +705,10 @@ class WkbWriter {
       return GeometryLayout_min(geom.getLayout(), layout);
     }
 
+    if (geom instanceof CompoundCurve || geom instanceof CurvePolygon) {
+      return GeometryLayout_min(geom.getLayout(), layout);
+    }
+
     if (geom instanceof GeometryCollection) {
       const geoms = geom.getGeometriesArray();
       for (let i = 0; i < geoms.length && layout !== 'XY'; i++) {
@@ -621,6 +735,11 @@ class WkbWriter {
       MultiLineString: WKBGeometryType.MULTI_LINE_STRING,
       MultiPolygon: WKBGeometryType.MULTI_POLYGON,
       GeometryCollection: WKBGeometryType.GEOMETRY_COLLECTION,
+      CircularString: WKBGeometryType.CIRCULAR_STRING,
+      CompoundCurve: WKBGeometryType.COMPOUND_CURVE,
+      CurvePolygon: WKBGeometryType.CURVE_POLYGON,
+      MultiCurve: WKBGeometryType.MULTI_CURVE,
+      MultiSurface: WKBGeometryType.MULTI_SURFACE,
     };
     const geomType = geom.getType();
     const typeId = wkblut[geomType];
@@ -636,7 +755,11 @@ class WkbWriter {
 
     this.writeWkbHeader(typeId, srid);
 
-    if (geom instanceof SimpleGeometry) {
+    if (geom instanceof CompoundCurve) {
+      this.writeGeometryCollection(geom.getGeometriesArray());
+    } else if (geom instanceof CurvePolygon) {
+      this.writeGeometryCollection(geom.getRingsArray());
+    } else if (geom instanceof SimpleGeometry) {
       const writerLUT = {
         Point: this.writePoint,
         LineString: this.writeLineString,
@@ -644,6 +767,7 @@ class WkbWriter {
         MultiPoint: this.writeMultiPoint,
         MultiLineString: this.writeMultiLineString,
         MultiPolygon: this.writeMultiPolygon,
+        CircularString: this.writeCircularString,
       };
       writerLUT[geomType].call(this, geom.getCoordinates(), geom.getLayout());
     } else if (geom instanceof GeometryCollection) {

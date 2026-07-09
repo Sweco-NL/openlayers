@@ -744,4 +744,67 @@ describe('ol/geom/Polygon.js', function () {
       expect(coordinates[0][3]).to.eql(1);
     });
   });
+
+  describe('forEachSegment', function () {
+    it('iterates all segments of a simple polygon', function () {
+      // Triangle: (0,0)→(4,0)→(2,3)→(0,0)
+      const polygon = new Polygon([
+        [
+          [0, 0],
+          [4, 0],
+          [2, 3],
+          [0, 0],
+        ],
+      ]);
+      const segments = [];
+      polygon.forEachSegment(function (start, end) {
+        segments.push([start.slice(), end.slice()]);
+      });
+      expect(segments.length).to.be(3);
+    });
+
+    it('iterates segments across all rings (exterior + holes)', function () {
+      // Square with a triangular hole
+      const polygon = new Polygon([
+        [
+          [0, 0],
+          [10, 0],
+          [10, 10],
+          [0, 10],
+          [0, 0],
+        ],
+        [
+          [2, 2],
+          [5, 2],
+          [3, 5],
+          [2, 2],
+        ],
+      ]);
+      const segments = [];
+      polygon.forEachSegment(function (start, end) {
+        segments.push([start.slice(), end.slice()]);
+      });
+      // 4 exterior segments + 3 hole segments = 7
+      expect(segments.length).to.be(7);
+    });
+
+    it('returns truthy value from callback for early exit', function () {
+      const polygon = new Polygon([
+        [
+          [0, 0],
+          [4, 0],
+          [4, 4],
+          [0, 4],
+          [0, 0],
+        ],
+      ]);
+      let count = 0;
+      const result = polygon.forEachSegment(function () {
+        count++;
+        return count === 2 ? 'stop' : undefined;
+      });
+      expect(result).to.be('stop');
+      expect(count).to.be(2);
+    });
+  });
 });

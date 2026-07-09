@@ -56,6 +56,27 @@ class VectorContext {
   drawGeometryCollection(geometryCollectionGeometry, feature, index) {}
 
   /**
+   * @param {import("../geom/CircularString.js").default} circularStringGeometry Circular string geometry.
+   * @param {import("../Feature.js").FeatureLike} feature Feature.
+   * @param {number} [index] Render order index.
+   */
+  drawCircularString(circularStringGeometry, feature, index) {}
+
+  /**
+   * @param {import("../geom/CurvePolygon.js").default} curvePolygonGeometry Curve polygon geometry.
+   * @param {import("../Feature.js").default} feature Feature.
+   * @param {number} [index] Render order index.
+   */
+  drawCurvePolygon(curvePolygonGeometry, feature, index) {}
+
+  /**
+   * @param {import("../geom/CompoundCurve.js").default} compoundCurveGeometry Compound curve.
+   * @param {import("../Feature.js").default} feature Feature.
+   * @param {number} [index] Render order index.
+   */
+  drawCompoundCurve(compoundCurveGeometry, feature, index) {}
+
+  /**
    * @param {import("../geom/LineString.js").default|import("./Feature.js").default} lineStringGeometry Line string geometry.
    * @param {import("../Feature.js").FeatureLike} feature Feature.
    * @param {number} [index] Render order index.
@@ -98,7 +119,7 @@ class VectorContext {
   drawPolygon(polygonGeometry, feature, index) {}
 
   /**
-   * @param {import("../geom/SimpleGeometry.js").default|import("./Feature.js").default} geometry Geometry.
+   * @param {import("../geom/SimpleGeometry.js").default|import("../geom/CompoundCurve.js").default|import("../geom/CurvePolygon.js").default|import("./Feature.js").default} geometry Geometry.
    * @param {import("../Feature.js").FeatureLike} feature Feature.
    * @param {number} [index] Render order index.
    */

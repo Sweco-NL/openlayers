@@ -170,7 +170,7 @@ class CanvasTextBuilder extends CanvasBuilder {
   }
 
   /**
-   * @param {import("../../geom/SimpleGeometry.js").default|import("../Feature.js").default} geometry Geometry.
+   * @param {import("../../geom/SimpleGeometry.js").default|import("../../geom/CompoundCurve.js").default|import("../../geom/CurvePolygon.js").default|import("../Feature.js").default} geometry Geometry.
    * @param {import("../../Feature.js").FeatureLike} feature Feature.
    * @param {number} [index] Render order index.
    * @override
@@ -287,6 +287,18 @@ class CanvasTextBuilder extends CanvasBuilder {
               geometry
             ).getCenter();
           break;
+        case 'CircularString':
+          flatCoordinates =
+            /** @type {import("../../geom/CircularString.js").default} */ (
+              geometry
+            ).getFlatMidpoint();
+          break;
+        case 'CompoundCurve':
+          flatCoordinates =
+            /** @type {import("../../geom/CompoundCurve.js").default} */ (
+              geometry
+            ).getFlatMidpoint();
+          break;
         case 'MultiLineString':
           flatCoordinates =
             /** @type {import("../../geom/MultiLineString.js").default} */ (
@@ -297,6 +309,16 @@ class CanvasTextBuilder extends CanvasBuilder {
         case 'Polygon':
           flatCoordinates =
             /** @type {import("../../geom/Polygon.js").default} */ (
+              geometry
+            ).getFlatInteriorPoint();
+          if (!textState.overflow) {
+            geometryWidths.push(flatCoordinates[2] / this.resolution);
+          }
+          stride = 3;
+          break;
+        case 'CurvePolygon':
+          flatCoordinates =
+            /** @type {import("../../geom/CurvePolygon.js").default} */ (
               geometry
             ).getFlatInteriorPoint();
           if (!textState.overflow) {

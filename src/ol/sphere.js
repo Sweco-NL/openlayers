@@ -1,6 +1,8 @@
 /**
  * @module ol/sphere
  */
+import {inflateCoordinates} from './geom/flat/inflate.js';
+import {isTessellatable} from './geom/Geometry.js';
 import {toDegrees, toRadians} from './math.js';
 
 /**
@@ -21,6 +23,32 @@ import {toDegrees, toRadians} from './math.js';
  * @type {number}
  */
 export const DEFAULT_RADIUS = 6371008.8;
+
+/**
+ * Tessellate a ring geometry into flat stride-2 coordinates.
+ * Works for CircularString, CompoundCurve, LineString, and LinearRing.
+ * @param {import("./geom/CurvePolygon.js").CurveRing} ring The ring geometry.
+ * @return {Array<number>} Flat coordinates with stride 2.
+ */
+function tessellateRing(ring) {
+  const curved = /** @type {import("./geom/CircularString.js").default} */ (
+    ring
+  );
+  if (isTessellatable(ring)) {
+    return curved.tessellate();
+  }
+  // plain LineString/LinearRing - extract XY from flat coordinates
+  const simple = /** @type {import("./geom/SimpleGeometry.js").default} */ (
+    ring
+  );
+  const c = simple.getFlatCoordinates();
+  const s = simple.getStride();
+  const result = [];
+  for (let i = 0; i < c.length; i += s) {
+    result.push(c[i], c[i + 1]);
+  }
+  return result;
+}
 
 /**
  * Get the great circle distance (in meters) between two geographic coordinates.
@@ -127,6 +155,31 @@ export function getLength(geometry, options) {
       }
       break;
     }
+    case 'CircularString':
+    case 'CompoundCurve': {
+      const flat = /** @type {import("./geom/CircularString.js").default} */ (
+        geometry
+      ).tessellate();
+      length = getLengthInternal(
+        inflateCoordinates(flat, 0, flat.length, 2),
+        radius,
+      );
+      break;
+    }
+    case 'CurvePolygon': {
+      const cp = /** @type {import("./geom/CurvePolygon.js").default} */ (
+        geometry
+      );
+      const rings = cp.getRingsArray();
+      for (i = 0, ii = rings.length; i < ii; ++i) {
+        const ringFlat = tessellateRing(rings[i]);
+        length += getLengthInternal(
+          inflateCoordinates(ringFlat, 0, ringFlat.length, 2),
+          radius,
+        );
+      }
+      break;
+    }
     default: {
       throw new Error('Unsupported geometry type: ' + type);
     }
@@ -223,6 +276,25 @@ export function getArea(geometry, options) {
         ).getGeometries();
       for (i = 0, ii = geometries.length; i < ii; ++i) {
         area += getArea(geometries[i], options);
+      }
+      break;
+    }
+    case 'CircularString':
+    case 'CompoundCurve': {
+      break;
+    }
+    case 'CurvePolygon': {
+      const cp = /** @type {import("./geom/CurvePolygon.js").default} */ (
+        geometry
+      );
+      const rings = cp.getRingsArray();
+      const outerFlat = tessellateRing(rings[0]);
+      const outerCoords = inflateCoordinates(outerFlat, 0, outerFlat.length, 2);
+      area = Math.abs(getAreaInternal(outerCoords, radius));
+      for (i = 1, ii = rings.length; i < ii; ++i) {
+        const holeFlat = tessellateRing(rings[i]);
+        const holeCoords = inflateCoordinates(holeFlat, 0, holeFlat.length, 2);
+        area -= Math.abs(getAreaInternal(holeCoords, radius));
       }
       break;
     }

@@ -4,6 +4,10 @@
  */
 
 import {distance} from '../coordinate.js';
+import CircularString from '../geom/CircularString.js';
+import CompoundCurve from '../geom/CompoundCurve.js';
+import CurvePolygon from '../geom/CurvePolygon.js';
+import {inflateCoordinates} from '../geom/flat/inflate.js';
 import GeometryCollection from '../geom/GeometryCollection.js';
 import LineString from '../geom/LineString.js';
 import MultiLineString from '../geom/MultiLineString.js';
@@ -59,12 +63,27 @@ export function interpolateCoordinate(coordinates, index) {
 }
 
 /**
+ * Describes a single traceable target produced by {@link module:ol/interaction/tracing.getTraceTargets}.
+ * Returned in the order discovered during geometry traversal.
+ *
  * @typedef {Object} TraceTarget
  * @property {Array<import("../coordinate.js").Coordinate>} coordinates Target coordinates.
  * @property {boolean} ring The target coordinates are a linear ring.
  * @property {number} startIndex The index of first traced coordinate.  A fractional index represents an
  * edge intersection.  Index values for rings will wrap (may be negative or larger than coordinates length).
  * @property {number} endIndex The index of last traced coordinate.  Details from startIndex also apply here.
+ * @property {Array<number>} [vertexIndices] Whole coordinate indices that are legal topology vertices.
+ * @property {import("../Feature.js").default} [feature] The source feature this target was extracted from.
+ * @property {import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default} [geometry]
+ * The smallest geometry instance this target corresponds to. For LineString features this is the LineString
+ * itself. For CurvePolygon this is the specific ring (CircularString/CompoundCurve/LineString). For Polygon
+ * this is the top-level Polygon (rings are not separate geometry instances; use `ringIndex` to identify the
+ * ring). For MultiLineString and MultiPolygon this is the top-level multi-geometry (sub-components are not
+ * exposed because their instances are cloned per accessor call and would not be stable across event dispatch).
+ * @property {number} [ringIndex] For `Polygon` and `CurvePolygon` sources, the index of the ring within
+ * the polygon (0 for the outer ring, 1+ for interior rings/holes). Undefined for line-shaped sources and
+ * for `MultiPolygon` (where polygon identity is not attributed).
+ * @api
  */
 
 /**
@@ -119,6 +138,18 @@ export function getTraceTargetUpdate(
     targetIndex < traceState.targets.length;
     ++targetIndex
   ) {
+    if (
+      traceState.targetIndex !== -1 &&
+      targetIndex !== traceState.targetIndex &&
+      !canSwitchTraceTarget_(
+        traceState.targets[traceState.targetIndex],
+        traceState.targets[targetIndex],
+        coordinate,
+      )
+    ) {
+      continue;
+    }
+
     const target = traceState.targets[targetIndex];
     const coordinates = target.coordinates;
 
@@ -217,9 +248,102 @@ export function getTraceTargetUpdate(
 }
 
 /**
+ * @param {TraceTarget} oldTarget Currently traced target.
+ * @param {TraceTarget} newTarget Candidate target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Current coordinate.
+ * @return {boolean} The candidate can be reached from the active target.
+ */
+function canSwitchTraceTarget_(oldTarget, newTarget, coordinate) {
+  return (
+    isTraceVertexPivot(oldTarget, newTarget, coordinate) ||
+    isStoredSharedTraceVertex(oldTarget, newTarget)
+  );
+}
+
+/**
+ * @param {TraceTarget} oldTarget Currently traced target.
+ * @param {TraceTarget} newTarget Candidate target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Current coordinate.
+ * @return {boolean} The candidate pivots at a shared target vertex.
+ */
+export function isTraceVertexPivot(oldTarget, newTarget, coordinate) {
+  return (
+    getTraceVertexIndexAtCoordinate(oldTarget, coordinate) !== null &&
+    traceTargetStartsAtCoordinate_(newTarget, coordinate)
+  );
+}
+
+/**
+ * @param {TraceTarget} oldTarget Currently traced target.
+ * @param {TraceTarget} newTarget Candidate target.
+ * @return {boolean} The current trace endpoint is the candidate start vertex.
+ */
+export function isStoredSharedTraceVertex(oldTarget, newTarget) {
+  if (
+    !isTraceTargetVertexIndex(oldTarget, oldTarget.endIndex) ||
+    !isTraceTargetVertexIndex(newTarget, newTarget.startIndex)
+  ) {
+    return false;
+  }
+  const oldEnd = interpolateCoordinate(
+    oldTarget.coordinates,
+    oldTarget.endIndex,
+  );
+  const newStart = interpolateCoordinate(
+    newTarget.coordinates,
+    newTarget.startIndex,
+  );
+  return coordinatesEqualXY(oldEnd, newStart);
+}
+
+/**
+ * @param {TraceTarget} target Trace target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Coordinate.
+ * @return {number|null} Whole target index at the coordinate, or null.
+ */
+export function getTraceVertexIndexAtCoordinate(target, coordinate) {
+  const coordinates = target.coordinates;
+  for (let i = 0, ii = coordinates.length; i < ii; ++i) {
+    const candidate = coordinates[i];
+    if (
+      coordinatesEqualXY(candidate, coordinate) &&
+      isTraceTargetVertexIndex(target, i)
+    ) {
+      return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * @param {TraceTarget} target Trace target.
+ * @param {import("../coordinate.js").Coordinate} coordinate Coordinate.
+ * @return {boolean} The target starts at the coordinate.
+ */
+function traceTargetStartsAtCoordinate_(target, coordinate) {
+  if (!isTraceTargetVertexIndex(target, target.startIndex)) {
+    return false;
+  }
+  const start = interpolateCoordinate(target.coordinates, target.startIndex);
+  return coordinatesEqualXY(start, coordinate);
+}
+
+/**
+ * Discover all traceable targets at a coordinate across a list of features. This is the same
+ * computation the {@link module:ol/interaction/Draw~Draw} interaction performs internally when
+ * tracing starts. Exposed so applications can introspect candidate trace sources (for example
+ * to drive UI feedback before the user commits to a trace).
+ *
+ * Returns one entry per traceable component: one per `LineString` / `CircularString` /
+ * `CompoundCurve` feature, one per ring of each `Polygon` / `CurvePolygon`, and recursively
+ * for the children of `MultiLineString`, `MultiPolygon`, and `GeometryCollection`.
+ * The returned objects share the same shape as the data the trace event handler observes;
+ * see {@link TraceTarget} for the per-field contract.
+ *
  * @param {import("../coordinate.js").Coordinate} coordinate The coordinate.
  * @param {Array<import("../Feature.js").default>} features The candidate features.
  * @return {Array<TraceTarget>} The trace targets.
+ * @api
  */
 export function getTraceTargets(coordinate, features) {
   /**
@@ -230,50 +354,171 @@ export function getTraceTargets(coordinate, features) {
   for (let i = 0; i < features.length; ++i) {
     const feature = features[i];
     const geometry = feature.getGeometry();
-    appendGeometryTraceTargets(coordinate, geometry, targets);
+    appendGeometryTraceTargets(coordinate, geometry, targets, feature);
   }
 
   return targets;
 }
 
 /**
+ * @param {TraceTarget} target Trace target.
+ * @param {number} index Trace target index.
+ * @return {boolean} The index identifies a legal topology vertex for this target.
+ */
+export function isTraceTargetVertexIndex(target, index) {
+  if (Math.abs(index - Math.round(index)) >= 1e-9) {
+    return false;
+  }
+  if (!target.vertexIndices) {
+    return true;
+  }
+  const normalized = getNormalizedIndex_(target.coordinates, Math.round(index));
+  return target.vertexIndices.includes(normalized);
+}
+
+/**
  * @param {import("../coordinate.js").Coordinate} coordinate The coordinate.
  * @param {import("../geom/Geometry.js").default} geometry The candidate geometry.
  * @param {Array<TraceTarget>} targets The trace targets.
+ * @param {import("../Feature.js").default} [feature] The source feature (propagated to targets).
  */
-function appendGeometryTraceTargets(coordinate, geometry, targets) {
+function appendGeometryTraceTargets(coordinate, geometry, targets, feature) {
   if (geometry instanceof LineString) {
-    appendTraceTarget(coordinate, geometry.getCoordinates(), false, targets);
+    appendTraceTarget(
+      coordinate,
+      geometry.getCoordinates(),
+      false,
+      targets,
+      undefined,
+      feature,
+      geometry,
+    );
     return;
   }
   if (geometry instanceof MultiLineString) {
     const coordinates = geometry.getCoordinates();
     for (let i = 0, ii = coordinates.length; i < ii; ++i) {
-      appendTraceTarget(coordinate, coordinates[i], false, targets);
+      appendTraceTarget(
+        coordinate,
+        coordinates[i],
+        false,
+        targets,
+        undefined,
+        feature,
+        geometry,
+      );
     }
     return;
   }
   if (geometry instanceof Polygon) {
     const coordinates = geometry.getCoordinates();
     for (let i = 0, ii = coordinates.length; i < ii; ++i) {
-      appendTraceTarget(coordinate, coordinates[i], true, targets);
+      appendTraceTarget(
+        coordinate,
+        coordinates[i],
+        true,
+        targets,
+        undefined,
+        feature,
+        geometry,
+        i,
+      );
     }
     return;
   }
   if (geometry instanceof MultiPolygon) {
-    const polys = geometry.getCoordinates();
-    for (let i = 0, ii = polys.length; i < ii; ++i) {
-      const coordinates = polys[i];
+    const polyCoords = geometry.getCoordinates();
+    for (let i = 0, ii = polyCoords.length; i < ii; ++i) {
+      const coordinates = polyCoords[i];
       for (let j = 0, jj = coordinates.length; j < jj; ++j) {
-        appendTraceTarget(coordinate, coordinates[j], true, targets);
+        appendTraceTarget(
+          coordinate,
+          coordinates[j],
+          true,
+          targets,
+          undefined,
+          feature,
+          geometry,
+        );
       }
+    }
+    return;
+  }
+  if (geometry instanceof CurvePolygon) {
+    const rings = geometry.getRingsArray();
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const ring = rings[i];
+      let tessellated;
+      const ringType = ring.getType();
+      if (ringType === 'CircularString') {
+        tessellated =
+          /** @type {import("../geom/CircularString.js").default} */ (
+            ring
+          ).tessellate();
+      } else if (ringType === 'CompoundCurve') {
+        tessellated =
+          /** @type {import("../geom/CompoundCurve.js").default} */ (
+            ring
+          ).tessellate();
+      } else {
+        tessellated =
+          /** @type {import("../geom/SimpleGeometry.js").default} */ (
+            ring
+          ).getFlatCoordinates();
+      }
+      const coords = inflateCoordinates(tessellated, 0, tessellated.length, 2);
+      const vertexIndices = getTraceVertexIndices_(ring, coords);
+      appendTraceTarget(
+        coordinate,
+        coords,
+        true,
+        targets,
+        vertexIndices,
+        feature,
+        ring,
+        i,
+      );
+    }
+    return;
+  }
+  if (geometry instanceof CompoundCurve) {
+    const tessellated = geometry.tessellate();
+    if (tessellated && tessellated.length >= 4) {
+      const coords = inflateCoordinates(tessellated, 0, tessellated.length, 2);
+      const vertexIndices = getTraceVertexIndices_(geometry, coords);
+      appendTraceTarget(
+        coordinate,
+        coords,
+        false,
+        targets,
+        vertexIndices,
+        feature,
+        geometry,
+      );
+    }
+    return;
+  }
+  if (geometry instanceof CircularString) {
+    const tessellated = geometry.tessellate();
+    if (tessellated && tessellated.length >= 4) {
+      const coords = inflateCoordinates(tessellated, 0, tessellated.length, 2);
+      const vertexIndices = getTraceVertexIndices_(geometry, coords);
+      appendTraceTarget(
+        coordinate,
+        coords,
+        false,
+        targets,
+        vertexIndices,
+        feature,
+        geometry,
+      );
     }
     return;
   }
   if (geometry instanceof GeometryCollection) {
     const geometries = geometry.getGeometries();
     for (let i = 0; i < geometries.length; ++i) {
-      appendGeometryTraceTargets(coordinate, geometries[i], targets);
+      appendGeometryTraceTargets(coordinate, geometries[i], targets, feature);
     }
     return;
   }
@@ -285,8 +530,22 @@ function appendGeometryTraceTargets(coordinate, geometry, targets) {
  * @param {Array<import("../coordinate.js").Coordinate>} coordinates The geometry component coordinates.
  * @param {boolean} ring The coordinates represent a linear ring.
  * @param {Array<TraceTarget>} targets The trace targets.
+ * @param {Array<number>} [vertexIndices] Whole coordinate indices that are legal topology vertices.
+ * @param {import("../Feature.js").default} [feature] Source feature for this target.
+ * @param {import("../geom/SimpleGeometry.js").default | import("../geom/CompoundCurve.js").default} [geometry]
+ * Smallest geometry instance for this target.
+ * @param {number} [ringIndex] Ring index within a polygon source (undefined for line-shaped sources).
  */
-function appendTraceTarget(coordinate, coordinates, ring, targets) {
+function appendTraceTarget(
+  coordinate,
+  coordinates,
+  ring,
+  targets,
+  vertexIndices,
+  feature,
+  geometry,
+  ringIndex,
+) {
   const x = coordinate[0];
   const y = coordinate[1];
   for (let i = 0, ii = coordinates.length - 1; i < ii; ++i) {
@@ -300,10 +559,90 @@ function appendTraceTarget(coordinate, coordinates, ring, targets) {
         ring: ring,
         startIndex: index,
         endIndex: index,
+        vertexIndices: vertexIndices,
+        feature: feature,
+        geometry: geometry,
+        ringIndex: ringIndex,
       });
       return;
     }
   }
+}
+
+/**
+ * Exact-equality coordinate comparison restricted to the X and Y components.
+ * Any Z/M components are ignored. This is the dimension contract the trace
+ * topology requires: vertices at the same XY but different Z must still be
+ * treated as the same graph vertex.
+ *
+ * Distinct from the N-D `equals` exported by `coordinate.js` (which several
+ * modules alias as `coordinatesEqual`); the `XY` suffix is intentional.
+ *
+ * @param {import("../coordinate.js").Coordinate} a First coordinate.
+ * @param {import("../coordinate.js").Coordinate} b Second coordinate.
+ * @return {boolean} Coordinates have equal X and Y.
+ */
+export function coordinatesEqualXY(a, b) {
+  return a[0] === b[0] && a[1] === b[1];
+}
+
+/**
+ * @param {LineCoordType} coordinates The coordinates.
+ * @param {number} index The index. May wrap.
+ * @return {number} Normalized whole index.
+ */
+function getNormalizedIndex_(coordinates, index) {
+  const count = coordinates.length;
+  let normalized = index % count;
+  if (normalized < 0) {
+    normalized += count;
+  }
+  return normalized;
+}
+
+/**
+ * @param {import("../geom/Geometry.js").default} geometry The curve geometry.
+ * @param {Array<import("../coordinate.js").Coordinate>} vertexCoordinates Legal vertex coordinates.
+ */
+function appendTraceVertexCoordinates_(geometry, vertexCoordinates) {
+  if (geometry instanceof LineString) {
+    vertexCoordinates.push(...geometry.getCoordinates());
+    return;
+  }
+  if (geometry instanceof CircularString) {
+    const coordinates = geometry.getCoordinates();
+    for (let i = 0, ii = coordinates.length; i < ii; i += 2) {
+      vertexCoordinates.push(coordinates[i]);
+    }
+    return;
+  }
+  if (geometry instanceof CompoundCurve) {
+    const geometries = geometry.getGeometriesArray();
+    for (let i = 0, ii = geometries.length; i < ii; ++i) {
+      appendTraceVertexCoordinates_(geometries[i], vertexCoordinates);
+    }
+  }
+}
+
+/**
+ * @param {import("../geom/Geometry.js").default} geometry The curve geometry.
+ * @param {LineCoordType} coordinates Tessellated target coordinates.
+ * @return {Array<number>} Legal topology vertex indices in the target coordinates.
+ */
+function getTraceVertexIndices_(geometry, coordinates) {
+  const vertexCoordinates = [];
+  appendTraceVertexCoordinates_(geometry, vertexCoordinates);
+  const vertexIndices = [];
+  for (let i = 0, ii = coordinates.length; i < ii; ++i) {
+    if (
+      vertexCoordinates.some((vertex) =>
+        coordinatesEqualXY(vertex, coordinates[i]),
+      )
+    ) {
+      vertexIndices.push(i);
+    }
+  }
+  return vertexIndices;
 }
 
 /**

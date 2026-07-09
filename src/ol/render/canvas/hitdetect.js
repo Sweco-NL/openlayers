@@ -133,8 +133,11 @@ export function createHitDetectionImageData(
         byGeometryType = {};
         featuresByZIndex[zIndex] = byGeometryType;
         byGeometryType['Polygon'] = [];
+        byGeometryType['CurvePolygon'] = [];
         byGeometryType['Circle'] = [];
         byGeometryType['LineString'] = [];
+        byGeometryType['CircularString'] = [];
+        byGeometryType['CompoundCurve'] = [];
         byGeometryType['Point'] = [];
       }
       const type = geometry.getType();

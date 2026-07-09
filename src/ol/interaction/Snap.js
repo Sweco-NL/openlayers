@@ -156,6 +156,14 @@ const GEOMETRY_SEGMENTERS = {
   },
 
   /**
+   * @param {import("../geom/LinearRing.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  LinearRing(geometry) {
+    return this.LineString(geometry);
+  },
+
+  /**
    * @param {import("../geom/MultiLineString.js").default} geometry Geometry.
    * @return {Array<Segment>} Segments
    */
@@ -227,6 +235,57 @@ const GEOMETRY_SEGMENTERS = {
    */
   Point(geometry) {
     return [[geometry.getFlatCoordinates().slice(0, 2)]];
+  },
+
+  /**
+   * @param {import("../geom/CircularString.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CircularString(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const coords = geometry.tessellate();
+    if (!coords || coords.length < 4) {
+      return segments;
+    }
+    for (let i = 0, ii = coords.length - 2; i < ii; i += 2) {
+      segments.push([coords.slice(i, i + 2), coords.slice(i + 2, i + 4)]);
+    }
+    return segments;
+  },
+
+  /**
+   * @param {import("../geom/CompoundCurve.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CompoundCurve(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const geometries = geometry.getGeometriesArray();
+    for (let i = 0, ii = geometries.length; i < ii; ++i) {
+      const segmenter = this[geometries[i].getType()];
+      if (segmenter) {
+        segments.push(...segmenter.call(this, geometries[i]));
+      }
+    }
+    return segments;
+  },
+
+  /**
+   * @param {import("../geom/CurvePolygon.js").default} geometry Geometry.
+   * @return {Array<Segment>} Segments
+   */
+  CurvePolygon(geometry) {
+    /** @type {Array<Segment>} */
+    const segments = [];
+    const rings = geometry.getRingsArray();
+    for (let i = 0, ii = rings.length; i < ii; ++i) {
+      const segmenter = this[rings[i].getType()];
+      if (segmenter) {
+        segments.push(...segmenter.call(this, rings[i]));
+      }
+    }
+    return segments;
   },
 
   /**

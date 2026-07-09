@@ -5,6 +5,9 @@ import Map from '../../../../../src/ol/Map.js';
 import MapBrowserEvent from '../../../../../src/ol/MapBrowserEvent.js';
 import View from '../../../../../src/ol/View.js';
 import Circle from '../../../../../src/ol/geom/Circle.js';
+import CircularString from '../../../../../src/ol/geom/CircularString.js';
+import CompoundCurve from '../../../../../src/ol/geom/CompoundCurve.js';
+import CurvePolygon from '../../../../../src/ol/geom/CurvePolygon.js';
 import GeometryCollection from '../../../../../src/ol/geom/GeometryCollection.js';
 import LineString from '../../../../../src/ol/geom/LineString.js';
 import MultiPoint from '../../../../../src/ol/geom/MultiPoint.js';
@@ -845,6 +848,177 @@ describe('ol.interaction.Snap', function () {
       });
 
       expect(customSegment).to.be.ok();
+    });
+  });
+
+  describe('curve geometries', function () {
+    let target;
+    const width = 360;
+    const height = 180;
+
+    beforeEach(function () {
+      target = document.createElement('div');
+      const style = target.style;
+      style.position = 'absolute';
+      style.left = '-1000px';
+      style.top = '-1000px';
+      style.width = width + 'px';
+      style.height = height + 'px';
+      document.body.appendChild(target);
+
+      map = new Map({
+        target: target,
+        view: new View({
+          projection: 'EPSG:4326',
+          center: [0, 0],
+          resolution: 1,
+        }),
+      });
+      map.renderSync();
+    });
+
+    afterEach(function () {
+      disposeMap(map);
+    });
+
+    it('snaps to CircularString through-point vertex', function () {
+      // Upper semicircle: (-5,0) -> (0,5) -> (5,0), radius 5, center (0,0)
+      const feature = new Feature(
+        new CircularString([
+          [-5, 0],
+          [0, 5],
+          [5, 0],
+        ]),
+      );
+      const snapInteraction = new Snap({
+        features: new Collection([feature]),
+        pixelTolerance: 5,
+      });
+      snapInteraction.setMap(map);
+
+      // Event directly above the through-point (0, 5)
+      const event = eventFromCoordinate([0, 5.4]);
+      let snapped = false;
+      snapInteraction.on('snap', function (snapEvent) {
+        snapped = true;
+        expect(snapEvent.feature).to.eql(feature);
+      });
+      snapInteraction.handleEvent(event);
+      expect(snapped).to.be(true);
+      // Must snap to exact through-point, not a nearby tessellated point
+      expect(event.coordinate[0]).to.be(0);
+      expect(event.coordinate[1]).to.be(5);
+    });
+
+    it('snaps to CircularString start/end vertices', function () {
+      const feature = new Feature(
+        new CircularString([
+          [-5, 0],
+          [0, 5],
+          [5, 0],
+        ]),
+      );
+      const snapInteraction = new Snap({
+        features: new Collection([feature]),
+        pixelTolerance: 5,
+      });
+      snapInteraction.setMap(map);
+
+      // Approach from outside the arc (away from tessellated interior)
+      const event = eventFromCoordinate([-5.4, 0]);
+      snapInteraction.handleEvent(event);
+      expect(event.coordinate[0]).to.be(-5);
+      expect(event.coordinate[1]).to.be(0);
+    });
+
+    it('snaps to CircularString edge', function () {
+      const feature = new Feature(
+        new CircularString([
+          [-5, 0],
+          [0, 5],
+          [5, 0],
+        ]),
+      );
+      const snapInteraction = new Snap({
+        features: new Collection([feature]),
+        pixelTolerance: 5,
+        vertex: false,
+      });
+      snapInteraction.setMap(map);
+
+      // Point outside the arc: should snap to nearest point on arc
+      const event = eventFromCoordinate([3, 5]);
+      let snapped = false;
+      snapInteraction.on('snap', function () {
+        snapped = true;
+      });
+      snapInteraction.handleEvent(event);
+      expect(snapped).to.be(true);
+      // Snapped point should lie on the circle (radius 5 from origin)
+      const dist = Math.sqrt(
+        event.coordinate[0] * event.coordinate[0] +
+          event.coordinate[1] * event.coordinate[1],
+      );
+      expect(dist).to.roughlyEqual(5, 0.5);
+    });
+
+    it('snaps to CompoundCurve vertices', function () {
+      const feature = new Feature(
+        new CompoundCurve([
+          new CircularString([
+            [-5, 0],
+            [0, 5],
+            [5, 0],
+          ]),
+          new LineString([
+            [5, 0],
+            [10, 0],
+          ]),
+        ]),
+      );
+      const snapInteraction = new Snap({
+        features: new Collection([feature]),
+        pixelTolerance: 5,
+      });
+      snapInteraction.setMap(map);
+
+      // Near through-point of the arc sub-geometry
+      const event1 = eventFromCoordinate([0, 5.4]);
+      snapInteraction.handleEvent(event1);
+      expect(event1.coordinate[0]).to.be(0);
+      expect(event1.coordinate[1]).to.be(5);
+
+      // Near end of the LineString sub-geometry
+      const event2 = eventFromCoordinate([10, 0.4]);
+      snapInteraction.handleEvent(event2);
+      expect(event2.coordinate[0]).to.be(10);
+      expect(event2.coordinate[1]).to.be(0);
+    });
+
+    it('snaps to CurvePolygon ring vertices', function () {
+      // Full circle as a closed ring
+      const feature = new Feature(
+        new CurvePolygon([
+          new CircularString([
+            [5, 0],
+            [0, 5],
+            [-5, 0],
+            [0, -5],
+            [5, 0],
+          ]),
+        ]),
+      );
+      const snapInteraction = new Snap({
+        features: new Collection([feature]),
+        pixelTolerance: 5,
+      });
+      snapInteraction.setMap(map);
+
+      // Near through-point (0, 5)
+      const event = eventFromCoordinate([0, 5.4]);
+      snapInteraction.handleEvent(event);
+      expect(event.coordinate[0]).to.be(0);
+      expect(event.coordinate[1]).to.be(5);
     });
   });
 });

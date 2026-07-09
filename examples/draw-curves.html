@@ -1,0 +1,42 @@
+---
+layout: example.html
+title: Draw Curved Geometries
+shortdesc: Draw CircularStrings, CompoundCurves, and CurvePolygons.
+docs: >
+  Draw curved geometries interactively.
+  <ul>
+    <li><strong>CircularString</strong> - click 3+ points (odd count),
+    double-click to finish.</li>
+    <li><strong>CompoundCurve</strong> - draw a mix of arc and line
+    segments. Press <kbd>T</kbd> to commit the current segment and toggle
+    to the other type. Double-click to finish.</li>
+    <li><strong>CurvePolygon</strong> - same as CompoundCurve, but the
+    ring auto-closes. Click near the start point or double-click to
+    finish.</li>
+    <li><strong>None (edit)</strong> - no drawing. Drag vertices to
+    modify, <kbd>Alt+Click</kbd> to delete, click an edge to insert.</li>
+  </ul>
+tags: "draw, circularstring, compoundcurve, curvepolygon, curve, arc, interaction"
+---
+<div id="map" class="map"></div>
+<form class="form-inline">
+  <label for="type">Draw &nbsp;</label>
+  <select id="type">
+    <option value="CircularString">CircularString</option>
+    <option value="CompoundCurve">CompoundCurve</option>
+    <option value="CurvePolygon">CurvePolygon</option>
+    <option value="None">None (edit)</option>
+  </select>
+  &nbsp;
+  <button type="button" id="undo">Undo</button>
+  <button type="button" id="clear">Clear All</button>
+  &nbsp;
+  <span id="segment-mode" style="font-weight:bold; color:#c00"></span>
+</form>
+<div style="margin-top:4px">
+  <span id="status" style="font-size:12px; color:#666"></span>
+</div>
+<div style="margin-top:4px">
+  <label>WKT:</label>
+  <textarea id="wkt" rows="3" style="width:100%"></textarea>
+</div>
